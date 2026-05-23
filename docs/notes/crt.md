@@ -1,7 +1,11 @@
-# CRT — Candle Range Theory (Timon / ICT University)
+# CRT — Candle Range Theory
 
-Source: `docs/pdfs/846803727-Basic-of-CRT.pdf` (90 pages, Canva deck by @timon_ict).
-This file is the working knowledge base the terminal will be built on top of.
+Working knowledge base the terminal is built on. Two source documents so far:
+
+- `docs/pdfs/846803727-Basic-of-CRT.pdf` — Timon / ICT University (Canva deck, 90 pages). The mechanical framework: AMD, 5 subtypes, DOL ladder. Covered in Part 1.
+- `docs/pdfs/942591252-CRT-SECRETS-SERIES.pdf` — RomeoTPT (founder) + TradesbyVee (author), 85-page LaTeX compilation of the 9-episode CRT Secrets series. Adds Model #1, Kiss of Death, SMT, key-level prerequisites, the 4-step trade recipe. Covered in Part 2.
+
+The two sources are complementary: Timon defines the **mechanics** of the pattern; Romeotpt / TradesbyVee define the **context** required for the pattern to be tradable.
 
 ---
 
@@ -262,6 +266,163 @@ Things this knowledge base directly maps into the future scanner:
 
 ---
 
+# Part 2 — CRT Secrets Series (RomeoTPT + TradesbyVee)
+
+The Secrets compilation reframes CRT as a *layered* system: pattern alone is not enough. A clean three-candle structure that prints in the wrong place at the wrong time should be ignored.
+
+## P2.1 — Model #1 (the single trigger candle)
+
+Model #1 is **one specific candle** (not a zone, not a cluster) that becomes the trigger for the expansion phase of a CRT.
+
+**Bearish Model #1** (sell setup):
+1. Find an old high on the chart (engineered BSL).
+2. Wait for price to stab into that old high.
+3. A **thick up-close candle** (large bullish body) forms inside or just past the level.
+4. Enter SHORT the moment the **next candle closes BELOW** that thick up-close candle's low.
+5. Stop loss: above the thick up-close candle's high.
+6. Target: next lows beneath / external SSL.
+
+**Bullish Model #1** is the exact mirror — old low, thick down-close candle, enter long when next candle closes ABOVE its high.
+
+Strengtheners:
+- **FVG confluence** — Model #1 inside or right at an FVG is the highest-probability variant ("Magic Ingredient").
+- Wait for the actual close. No early entries.
+
+## P2.2 — Kiss of Death (KOD)
+
+KOD = the **final** turtle soup before price reaches its major target. It is the market's last trap before the big expansion completes.
+
+Three candles:
+1. Accumulation — smart money builds.
+2. Manipulation — fake breakout to engineer liquidity.
+3. Distribution — KOD prints; explosive move follows.
+
+**Bearish KOD**: price pushes above an old high (TS), a big up-close candle forms (looks bullish to retail), then price closes back below the TS point. Target = CRT low.
+**Bullish KOD**: mirror — TS below an old low, big down-close candle, then close back above. Target = CRT high.
+
+Entry rule: wait for the KOD candle to close, enter in the OPPOSITE direction, stop loss beyond the turtle soup point.
+KOD + FVG = highest conviction trade per the deck.
+
+## P2.3 — The three-candle journey (zoomed view)
+
+Same AMD triad but the Secrets series adds an explicit beginner / advanced split:
+
+| Candle | Phase | Trader role | Beginner advice |
+|--------|-------|-------------|-----------------|
+| 1 | Accumulation | Watch | Don't trade |
+| 2 | Manipulation | Avoid the trap | Don't trade until experienced |
+| 3 | Distribution | TRADE | Only this one as a beginner |
+
+**Inside Candle 2 (micro-structure):** Turtle Soup → Model #1 → Breaker → OTE → Kiss of Death. Every CRT contains these elements; the operator's job is just to recognize them.
+
+## P2.4 — Key Levels are the gating prerequisite
+
+> "CRT patterns ONLY work well when they happen at key levels."
+
+Key level definition: a price where price has historically bounced or reversed.
+
+Sources:
+- Old highs (engineered BSL).
+- Old lows (engineered SSL).
+- Sites of prior SMT footprints (where institutions left signatures).
+
+Operating modes (pick one per level, do not mix):
+- **Trade TO the level** — fade approaching price into the level.
+- **Trade FROM the level** — wait for confirmed bounce off the level.
+
+Watch out for **fake bounces** — the market regularly prints one false bounce before the real one. Wait for confirmation.
+
+## P2.5 — SMT (Smart Money Technique) divergence
+
+Correlated-pair check. Two markets that usually move together; when one prints a new extreme and the other fails to, that's an SMT signal.
+
+| Pattern | Market A | Market B | Signal |
+|---------|----------|----------|--------|
+| Bearish SMT | new high | fails to make new high | SELL |
+| Bullish SMT | new low  | fails to make new low  | BUY |
+
+Standard pairs:
+- EURUSD ↔ DXY (inverse correlation)
+- BTC ↔ ETH (positive correlation)
+- Gold ↔ DXY (inverse)
+- Sector leader vs follower (in equities)
+
+Combined with KOD: **SMT + KOD = high conviction**.
+Combined with HTF bias: only take bullish SMT when HTF is bullish, only bearish SMT when HTF is bearish.
+
+## P2.6 — Weekly candle rhythm
+
+Slightly refined version of Timon's weekly windows:
+
+| Day | Role |
+|-----|------|
+| Monday | Open + manipulation often happens |
+| Tuesday – Wednesday | Real move develops |
+| Thursday – Friday | Distribution + preparation for next week |
+
+## P2.7 — The 4-step recipe (Episode 9)
+
+The full pipeline a trade must pass before execution:
+
+1. **Higher-Timeframe Narrative** — monthly / weekly / daily candle shape, big liquidity pools, FVGs, prior highs/lows. Bias is bullish, bearish, or neutral?
+2. **Market Profile and Structure** — mark relevant highs/lows; identify any true market-structure shifts (clean close past a prior structure point).
+3. **Stack Confluences** — only trade when multiple line up:
+   - CRT (AMD) present
+   - FVG at relevant location
+   - SMT aligned
+   - Model #1 or true MSS
+   - Time of day / session (NY anchors, London session)
+4. **Define Entry Model (LAST step)** — choose Model #1 entry or MSS entry. Entry is the final confirmation, never the first decision.
+
+## P2.8 — Risk model
+
+- Stop loss is set **just beyond the turtle soup point**. The rationale: if your stop is the TS itself, it's unlikely to be re-hunted.
+- Position size: risk **1–2% of account per trade**. Non-negotiable.
+- Exit by **price** (target hit) OR by **time** (session ends, e.g., London close). Both legitimate.
+- Take-profit ladder: TP1 at **50%** of the move (the "first slice"), TP2 at the full target (CRT high / low / extended DOL).
+- Always have a **Plan B** — the alternate scenario written before the trade fires.
+
+## P2.9 — Why a CRT trade goes wrong
+
+Per Episode 8, there are exactly three failure modes:
+1. **SMT Wall** — a correlated market diverged; the setup was blocked by smart money. Always check SMT before trading.
+2. **50% Mission Complete** — price reached the LHF and stopped. The CRT did its first job; the trade still printed money. Don't complain.
+3. **Wrong Direction** — trading against the trend / HTF bias. Only trade with the bigger-picture direction.
+
+Journaling discipline: **Catch → Miss → Avoid → Repeat**.
+
+## P2.10 — Pre-trade checklist
+
+Before executing, every item must be true:
+1. Higher-timeframe bias confirmed.
+2. CRT / FVG / SMT aligned.
+3. True market-structure shift (if applicable).
+4. Entry model confirmed (Model #1 or MSS).
+5. Stop and target planned; risk math done (1-2%).
+6. Time / session window matches the setup.
+7. Plan B (alternate scenario) prepared.
+
+---
+
+## P2.11 — Implications for the terminal (delta from Part 1)
+
+New modules the scanner needs, in priority order:
+
+- **Key-level tracker** — per symbol, maintain a rolling list of swept / unswept old highs and old lows. CRT signals that don't sit on a key level should be down-tiered or dropped.
+- **SMT pair monitor** — for each tracked symbol, store a list of correlated symbols (BTC↔ETH by default for crypto). On every new HTF extreme, compare and flag divergences. Signals on a symbol whose pair is diverging the wrong way get blocked or down-tiered.
+- **FVG detector** — three-candle gap detector. FVG location is one of the confluences in the 4-step recipe.
+- **Model #1 sub-detector** — orthogonal to the 5 subtype detectors. Single-candle trigger detection right after a key-level sweep.
+- **KOD detector** — the *final* TS before a target completes; needs awareness of an in-progress CRT and its DOL ladder.
+- **Confluence stacker** — produces a numeric confluence score per signal:
+  - +X for HTF bias agreement
+  - +X for key-level presence
+  - +X for FVG alignment
+  - +X for SMT confirmation
+  - +X for high time-tier
+  - the runtime can require a minimum confluence score before opening a paper position
+- **Failure tagging** — when a paper position closes at SL, tag the reason via the three Episode-8 buckets so the journal can be analyzed by mode.
+- **Risk model refinement** — set stop directly at the TS price (no extra buffer beyond a small slippage cushion). Add explicit time-based exit (close at session end if neither TP nor SL hit).
+
 ## Glossary
 
 - **CRT** — Candle Range Theory
@@ -283,3 +444,9 @@ Things this knowledge base directly maps into the future scanner:
 - **OB** — Order Block
 - **AMD** — Accumulation / Manipulation / Distribution (same as PO3)
 - **Q1–Q4** — Quartile mapping of a single HTF candle: Q1+Q2 = Accumulation, Q3 = Manipulation, Q4 = Distribution/Closure
+- **Model #1** — Single trigger candle (thick body) that closes back through a swept old high/low; the "starter pistol" for the expansion
+- **KOD** — Kiss of Death, the final TS before a CRT target completes
+- **SMT** — Smart Money Technique; correlated-pair divergence
+- **OTE** — Optimal Trade Entry (Fibonacci 0.62–0.79 retrace zone in ICT vocabulary)
+- **Breaker** — Failed order block that flips polarity after a structure shift
+- **Key level** — Price at which historical bounces have occurred; CRT prerequisite
