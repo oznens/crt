@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from crt.backtest.engine import BacktestReport, BacktestRunner
 from crt.context import SMTMonitor, Tier
-from crt.data.mexc import MexcClient
+from crt.data.bybit import BybitClient
 from crt.models import CRTSubtype, PositionStatus, Timeframe
 from crt.paper import FailureMode, PaperConfig
 
@@ -99,7 +99,7 @@ class ParallelBacktestReport:
 
 
 async def parallel_backtest(
-    client: MexcClient,
+    client: BybitClient,
     symbols: list[str],
     timeframes: list[Timeframe],
     *,

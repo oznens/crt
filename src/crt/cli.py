@@ -17,7 +17,7 @@ from crt.backtest import (
 )
 from crt.chart import write_chart_html
 from crt.context import SMTMonitor, Tier, score_signal
-from crt.data.mexc import MexcClient
+from crt.data.bybit import BybitClient
 from crt.detector import CRTDetector, detect_kod, detect_model1, model1_to_signal
 from crt.models import Direction, Timeframe
 from crt.paper import PaperConfig, PaperEngine
@@ -131,7 +131,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def _resolve_symbols(args: argparse.Namespace) -> list[str]:
     if args.symbols:
         return args.symbols
-    async with MexcClient() as client:
+    async with BybitClient() as client:
         return await client.fetch_top_symbols(limit=args.top, quote=args.quote)
 
 
@@ -163,7 +163,7 @@ async def _run_backtest(args: argparse.Namespace) -> int:
     paper_cfg = PaperConfig(starting_balance=args.balance, risk_per_trade=args.risk)
 
     if args.parallel:
-        async with MexcClient() as client:
+        async with BybitClient() as client:
             report = await parallel_backtest(
                 client, symbols, timeframes,
                 paper_config=paper_cfg,
@@ -183,8 +183,8 @@ async def _run_backtest(args: argparse.Namespace) -> int:
         require_htf_alignment=args.strict_htf,
         min_confluence=args.min_confluence,
     )
-    async with MexcClient() as client:
-        await runner.load_from_mexc(client, limit_per_tf=args.bars)
+    async with BybitClient() as client:
+        await runner.load_from_exchange(client, limit_per_tf=args.bars)
     print(format_report(runner.report()))
     return 0
 
@@ -192,7 +192,7 @@ async def _run_backtest(args: argparse.Namespace) -> int:
 async def _run_chart_once(args: argparse.Namespace) -> int:
     tf = Timeframe(args.tf)
     out = Path(args.out)
-    async with MexcClient() as client:
+    async with BybitClient() as client:
         candles = await client.fetch_klines(args.symbol, tf, limit=args.bars)
         # Pair candles for SMT divergence overlay.
         smt_monitor = SMTMonitor(CandleStore())

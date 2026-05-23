@@ -19,7 +19,7 @@ from crt.paper import PaperConfig
 from tests.conftest import make_filler, mk_candle
 
 
-class _FakeMexcClient:
+class _FakeExchangeClient:
     """Returns canned candles per (symbol, tf) so the parallel runner
     can be driven without touching the network."""
 
@@ -56,7 +56,7 @@ def test_parallel_backtest_aggregates_per_symbol_reports():
         ("ETH_USDT", tf): _flat_sequence("ETH_USDT", tf, start),
         ("SOL_USDT", tf): _flat_sequence("SOL_USDT", tf, start),
     }
-    client = _FakeMexcClient(data)
+    client = _FakeExchangeClient(data)
 
     report = asyncio.run(parallel_backtest(
         client, ["BTC_USDT", "SOL_USDT"], [tf],
@@ -86,7 +86,7 @@ def test_parallel_backtest_loads_correlated_pair():
         ("BTC_USDT", tf): _bullish_classic_sequence("BTC_USDT", tf, start),
         ("ETH_USDT", tf): _flat_sequence("ETH_USDT", tf, start),
     }
-    client = _FakeMexcClient(data)
+    client = _FakeExchangeClient(data)
     asyncio.run(parallel_backtest(
         client, ["BTC_USDT"], [tf],
         paper_config=PaperConfig(risk_per_trade=100.0),

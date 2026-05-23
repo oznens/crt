@@ -3,7 +3,7 @@ that the live runtime uses.
 
 Two ways to seed candles:
 
-1. `load_from_mexc(...)` — pull a window of klines via the REST endpoint
+1. `load_from_exchange(...)` — pull a window of klines via the REST endpoint
    and replay them in chronological order.
 2. `load_from_iterable(candles)` — feed any sequence of `Candle` objects.
    Useful for tests, fixture-based scenarios, or off-exchange data.
@@ -29,7 +29,7 @@ from crt.context import (
     score_signal,
     signal_aligned_with_htf,
 )
-from crt.data.mexc import MexcClient
+from crt.data.bybit import BybitClient
 from crt.detector import CRTDetector, detect_kod, detect_model1, model1_to_signal
 from crt.models import (
     Candle,
@@ -208,13 +208,13 @@ class BacktestRunner:
         for candle in ordered:
             self._on_candle(candle)
 
-    async def load_from_mexc(
+    async def load_from_exchange(
         self,
-        client: MexcClient,
+        client: BybitClient,
         *,
         limit_per_tf: int = 500,
     ) -> None:
-        """Bootstrap from MEXC REST: pull the most-recent N closed candles
+        """Bootstrap from the exchange REST: pull the most-recent N closed candles
         per (symbol, tf) and replay them through the pipeline.
 
         For longer windows the caller can stitch multiple calls together

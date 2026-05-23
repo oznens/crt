@@ -1,4 +1,4 @@
-"""Async runtime: stitches MEXC streams → store → detector → paper → TUI.
+"""Async runtime: stitches Bybit streams → store → detector → paper → TUI.
 
 Bootstrap is done once via REST (warms each ringbuffer with the most recent
 closed candles so the detector has enough lookback). After that, a single
@@ -19,8 +19,8 @@ from crt.context import (
     score_signal,
     signal_aligned_with_htf,
 )
-from crt.data.mexc import MexcClient
-from crt.data.mexc_ws import MexcWsStream
+from crt.data.bybit import BybitClient
+from crt.data.bybit_ws import BybitWsStream
 from crt.detector import CRTDetector, detect_kod, detect_model1, model1_to_signal
 from crt.models import Candle, PositionStatus, Signal, Timeframe
 from crt.paper import PaperEngine
@@ -62,7 +62,7 @@ class Runtime:
 
     # ---------------------------------------------------------------- public
 
-    async def bootstrap(self, client: MexcClient) -> None:
+    async def bootstrap(self, client: BybitClient) -> None:
         """Fill the ringbuffer with recent history before live stream starts."""
         async def _one(sym: str, tf: Timeframe) -> None:
             try:
@@ -154,11 +154,11 @@ class Runtime:
         return True
 
     async def run(self) -> None:
-        async with MexcClient() as client:
+        async with BybitClient() as client:
             await self.bootstrap(client)
 
         pairs = [(s, tf) for s in self.symbols for tf in self.timeframes]
-        async with MexcWsStream(pairs) as stream, self.dashboard.live() as live:
+        async with BybitWsStream(pairs) as stream, self.dashboard.live() as live:
             consumer = asyncio.create_task(self._consume(stream))
             try:
                 while not consumer.done():
@@ -172,6 +172,6 @@ class Runtime:
 
     # --------------------------------------------------------------- private
 
-    async def _consume(self, stream: MexcWsStream) -> None:
+    async def _consume(self, stream: BybitWsStream) -> None:
         async for candle in stream:
             self.on_candle(candle)

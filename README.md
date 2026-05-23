@@ -5,7 +5,7 @@ A scanner + paper-trading terminal for crypto markets, built around the
 
 This repo is in heavy development. The current focus is:
 
-1. Ingest MEXC perpetual futures market data (REST polling first, WebSocket next).
+1. Ingest Bybit V5 linear perpetuals market data (REST bootstrap + WS live stream).
 2. Detect all 5 CRT subtypes via a generic state machine.
 3. Project DOL ladders (LHF → Initial DOL → Extended DOL) for each signal.
 4. Paper-trade the signals to validate edge before going live.
@@ -15,7 +15,7 @@ This repo is in heavy development. The current focus is:
 
 ```
 src/crt/
-├── data/        # MEXC client (REST + WS)
+├── data/        # Bybit client (REST + WS); MEXC client kept as a legacy fallback
 ├── store/       # In-memory candle ringbuffer
 ├── detector/    # CRT subtype state machine
 ├── context/     # HTF→LTF alignment, time windows, IPDA/IRL-ERL filters
@@ -36,10 +36,10 @@ Reference material:
 ```bash
 pip install -e .[dev]
 
-# Live scanner (default): top 50 USDT perpetuals by 24h volume
+# Live scanner (default): top 50 Bybit USDT linear perps by 24h turnover
 crt scan --tf 15m 1h 4h
 
-# Pin an explicit watchlist
+# Pin an explicit watchlist (canonical underscore form; Bybit's BTCUSDT is normalised)
 crt scan --symbols BTC_USDT ETH_USDT SOL_USDT --tf 15m 1h 4h
 
 # Smaller universe
@@ -50,6 +50,9 @@ crt scan --min-tier high --strict-htf
 
 # Backtest the last N bars per (symbol, tf) and print a summary report
 crt backtest --top 20 --tf 1h --bars 1000
+
+# Parallel backtest across the top-50 universe (concurrent REST fetches)
+crt backtest --top 50 --tf 1h --bars 1000 --parallel --concurrency 8
 
 # Render a single-symbol Plotly chart with SMC overlays (FVG, OB, BOS, swings)
 # and CRT signal markers; open the HTML in any browser
