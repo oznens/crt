@@ -7,12 +7,17 @@ import asyncio
 import logging
 import sys
 
+from pathlib import Path
+
 from crt.backtest.engine import BacktestRunner, format_report
+from crt.chart import write_chart_html
 from crt.context import Tier
 from crt.data.mexc import MexcClient
+from crt.detector import CRTDetector
 from crt.models import Timeframe
 from crt.paper import PaperConfig, PaperEngine
 from crt.runtime import Runtime
+from crt.store import CandleStore
 
 DEFAULT_TFS = [Timeframe.M15, Timeframe.H1, Timeframe.H4]
 
@@ -58,6 +63,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--bars", type=int, default=500,
         help="Closed candles per (symbol, tf) to pull from REST (default 500)",
     )
+
+    p_chart = sub.add_parser(
+        "chart",
+        help="Render a candle chart with SMC + CRT overlays to an HTML file",
+    )
+    p_chart.add_argument("symbol", help="Single symbol, e.g. BTC_USDT")
+    p_chart.add_argument(
+        "--tf", default=Timeframe.H1.value,
+        help="Timeframe (default 1h)",
+    )
+    p_chart.add_argument(
+        "--bars", type=int, default=500,
+        help="Closed candles to fetch (default 500)",
+    )
+    p_chart.add_argument(
+        "--out", default="chart.html",
+        help="Output HTML file path (default chart.html)",
+    )
+    p_chart.add_argument(
+        "--refresh", type=int, default=0,
+        help="Add meta-refresh tag with given seconds; 0 disables auto-reload",
+    )
+    p_chart.add_argument(
+        "--watch", type=int, default=0,
+        help="Re-render every N seconds and rewrite the same file (0 = one-shot)",
+    )
+    p_chart.add_argument("--swing-length", type=int, default=10)
 
     # Default to `scan` if no subcommand given so old usage keeps working.
     args = p.parse_args(argv)
@@ -109,6 +141,40 @@ async def _run_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_chart_once(args: argparse.Namespace) -> int:
+    tf = Timeframe(args.tf)
+    out = Path(args.out)
+    async with MexcClient() as client:
+        candles = await client.fetch_klines(args.symbol, tf, limit=args.bars)
+    store = CandleStore()
+    for c in candles:
+        store.append(c)
+    signals = CRTDetector(store).evaluate(args.symbol, tf)
+    write_chart_html(
+        candles, signals, out,
+        title=f"{args.symbol} {tf.value}  ·  {len(candles)} bars  ·  {len(signals)} signals",
+        refresh_seconds=args.refresh,
+    )
+    abs_path = out.resolve()
+    logging.info("chart written: %s  →  file://%s", out, abs_path)
+    return 0
+
+
+async def _run_chart_watch(args: argparse.Namespace) -> int:
+    """Re-render the chart every `args.watch` seconds until interrupted.
+
+    The HTML is meta-refresh-tagged at the same cadence so any browser
+    pointed at file://.../chart.html will reload automatically.
+    """
+    args.refresh = max(args.refresh, args.watch)
+    try:
+        while True:
+            await _run_chart_once(args)
+            await asyncio.sleep(args.watch)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(
@@ -118,6 +184,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.cmd == "backtest":
             return asyncio.run(_run_backtest(args))
+        if args.cmd == "chart":
+            if args.watch > 0:
+                return asyncio.run(_run_chart_watch(args))
+            return asyncio.run(_run_chart_once(args))
         return asyncio.run(_run_scan(args))
     except KeyboardInterrupt:
         return 0

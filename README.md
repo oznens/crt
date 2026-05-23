@@ -50,7 +50,22 @@ crt scan --min-tier high --strict-htf
 
 # Backtest the last N bars per (symbol, tf) and print a summary report
 crt backtest --top 20 --tf 1h --bars 1000
+
+# Render a single-symbol Plotly chart with SMC overlays (FVG, OB, BOS, swings)
+# and CRT signal markers; open the HTML in any browser
+crt chart BTC_USDT --tf 1h --bars 500 --out chart.html
+
+# Same, but re-render every 60s so the browser auto-reloads via meta-refresh
+crt chart BTC_USDT --tf 15m --watch 60
 ```
+
+## SMC integration
+
+The chart command uses [`smartmoneyconcepts`](https://github.com/joshyattridge/smart-money-concepts)
+under the hood. The same library is exposed via `crt.smc` so any of its
+indicators (FVG, swing highs/lows, BOS/CHoCH, order blocks, liquidity,
+previous high/low, sessions, retracements) can be reused inside the
+detector and confluence stacker.
 
 ## Tests
 
