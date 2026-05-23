@@ -16,7 +16,7 @@ from plotly.subplots import make_subplots
 
 from crt.context.smt import SMTReading, SMTState
 from crt.detector.kod import KODSignal
-from crt.models import Candle, Direction, Signal
+from crt.models import Candle, Direction, PaperPosition, PositionStatus, Signal
 from crt.smc import SMCSnapshot, compute
 
 
@@ -99,6 +99,70 @@ def _annotations_for_bos(snap: SMCSnapshot, df_index) -> list[dict]:
     return out
 
 
+def _position_shapes_and_annotations(
+    positions: Sequence[PaperPosition],
+    last_ts,
+    failure_tagger=None,
+) -> tuple[list[dict], list[dict]]:
+    """Draw each closed paper position's entry / SL / TP rails plus a close
+    marker. If the position hit SL, annotate it with the failure mode."""
+    shapes: list[dict] = []
+    annotations: list[dict] = []
+    for pos in positions:
+        x0 = pos.opened_at
+        x1 = pos.closed_at or last_ts
+        # Entry rail (blue dashed)
+        shapes.append(dict(
+            type="line", xref="x", yref="y",
+            x0=x0, x1=x1, y0=pos.entry_price, y1=pos.entry_price,
+            line=dict(color="rgba(100, 181, 246, 0.85)", width=1, dash="dot"),
+        ))
+        # Stop loss (red solid)
+        shapes.append(dict(
+            type="line", xref="x", yref="y",
+            x0=x0, x1=x1, y0=pos.stop_loss, y1=pos.stop_loss,
+            line=dict(color="rgba(239, 83, 80, 0.85)", width=1.2),
+        ))
+        # Take profits — TP1 amber, TP2 green, TP3 lighter green if present
+        tp_colors = ["rgba(255, 193, 7, 0.85)",
+                     "rgba(38, 198, 218, 0.85)",
+                     "rgba(102, 187, 106, 0.65)"]
+        for i, tp in enumerate(pos.take_profits[:3]):
+            shapes.append(dict(
+                type="line", xref="x", yref="y",
+                x0=x0, x1=x1, y0=tp, y1=tp,
+                line=dict(color=tp_colors[i], width=1, dash="dash"),
+            ))
+        # Close marker + status text
+        status = pos.status
+        if status == PositionStatus.CLOSED_TP:
+            close_color = "#26a69a"
+            close_label = "TP"
+        elif status == PositionStatus.CLOSED_SL:
+            close_color = "#ef5350"
+            close_label = "SL"
+            if failure_tagger is not None:
+                tag = failure_tagger(pos)
+                close_label = f"SL · {tag.mode.value}"
+        elif status in (PositionStatus.OPEN, PositionStatus.TP1):
+            close_color = "#ffb74d"
+            close_label = status.value
+        else:
+            close_color = "#90a4ae"
+            close_label = status.value
+        anchor_y = pos.entry_price
+        annotations.append(dict(
+            x=x1, y=anchor_y, xref="x", yref="y",
+            text=f"<b>{close_label}</b><br>{pos.realized_pnl:+.2f}",
+            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1,
+            arrowcolor=close_color,
+            ax=20, ay=-30,
+            font=dict(size=10, color="#fff"),
+            bgcolor=close_color, bordercolor=close_color, borderpad=2,
+        ))
+    return shapes, annotations
+
+
 def _signal_label(sig: Signal) -> str:
     """Hover text combining subtype, confidence and confluence breakdown."""
     parts = [
@@ -168,6 +232,8 @@ def render_chart(
     signals: Sequence[Signal] = (),
     kods: Sequence[KODSignal] = (),
     smt_reading: SMTReading | None = None,
+    positions: Sequence[PaperPosition] = (),
+    failure_tagger=None,
     *,
     title: str = "",
     swing_length: int = 10,
@@ -302,13 +368,19 @@ def render_chart(
     fig.update_layout(
         title=full_title,
         xaxis_rangeslider_visible=False,
+        xaxis=dict(range=[df.index[0], df.index[-1]]) if len(df) else None,
         template="plotly_dark",
         height=720,
         margin=dict(l=40, r=40, t=60, b=40),
         shapes=(_shapes_for_fvgs(snap, df.index)
                 + _shapes_for_order_blocks(snap, df.index)
-                + extra_shapes),
-        annotations=_annotations_for_bos(snap, df.index) + extra_annotations,
+                + extra_shapes
+                + _position_shapes_and_annotations(positions, df.index[-1],
+                                                   failure_tagger)[0]),
+        annotations=(_annotations_for_bos(snap, df.index)
+                     + extra_annotations
+                     + _position_shapes_and_annotations(positions, df.index[-1],
+                                                        failure_tagger)[1]),
         legend=dict(orientation="h", y=1.05),
     )
     return fig
@@ -320,13 +392,18 @@ def write_chart_html(
     out_path: Path,
     kods: Sequence[KODSignal] = (),
     smt_reading: SMTReading | None = None,
+    positions: Sequence[PaperPosition] = (),
+    failure_tagger=None,
     *,
     title: str = "",
     refresh_seconds: int = 0,
 ) -> Path:
     """Render a chart to HTML on disk. If `refresh_seconds` > 0, the page
     auto-reloads at that interval so the same URL stays live."""
-    fig = render_chart(candles, signals, kods=kods, smt_reading=smt_reading, title=title)
+    fig = render_chart(
+        candles, signals, kods=kods, smt_reading=smt_reading,
+        positions=positions, failure_tagger=failure_tagger, title=title,
+    )
     html = fig.to_html(full_html=True, include_plotlyjs="cdn")
     if refresh_seconds > 0:
         meta = f'<meta http-equiv="refresh" content="{refresh_seconds}">'

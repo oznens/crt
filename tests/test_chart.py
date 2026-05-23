@@ -93,6 +93,33 @@ def test_render_chart_distinguishes_model1_from_crt_signals():
     assert any("Bullish Model #1" in n for n in names)
 
 
+def test_render_chart_overlays_paper_positions_with_failure_tags():
+    from datetime import datetime, timezone
+    from crt.models import CRTSubtype, PaperPosition, PositionStatus
+    from crt.paper import FailureMode, FailureTag
+
+    candles = _candles()
+    sig = Signal(
+        symbol="BTC_USDT", tf=Timeframe.H1, subtype=CRTSubtype.CLASSIC_3,
+        direction=Direction.BULLISH, detected_at=candles[5].open_time,
+        range_high=candles[5].high, range_low=candles[5].low,
+        purge_price=candles[5].low, confidence=0.8,
+        lhf=candles[5].midpoint, initial_dol=candles[5].high,
+    )
+    pos = PaperPosition(
+        signal=sig, entry_price=candles[5].close, stop_loss=candles[5].low - 0.5,
+        take_profits=[candles[5].midpoint, candles[5].high, candles[5].high + 1.0],
+        size=10.0, opened_at=candles[5].open_time,
+        status=PositionStatus.CLOSED_SL, closed_at=candles[15].open_time,
+        realized_pnl=-95.0,
+    )
+    tagger = lambda p: FailureTag(FailureMode.COUNTER_TREND, "demo")
+    fig = render_chart(candles, [sig], positions=[pos], failure_tagger=tagger)
+    # Annotation should include the failure mode label.
+    texts = [a.text for a in fig.layout.annotations]
+    assert any("counter_trend" in t for t in texts), texts
+
+
 def test_render_chart_marks_kod_spikes():
     from crt.context.smt import SMTReading, SMTState
     from crt.detector.kod import KODSignal

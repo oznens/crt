@@ -95,6 +95,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Re-render every N seconds and rewrite the same file (0 = one-shot)",
     )
     p_chart.add_argument("--swing-length", type=int, default=10)
+    p_chart.add_argument(
+        "--with-paper", action="store_true",
+        help="Replay the candles through the backtest engine and overlay "
+             "the resulting paper positions (entry/SL/TP rails + close markers)",
+    )
+    # Args reused from the backtest engine when --with-paper is set.
+    p_chart.add_argument("--balance", type=float, default=10_000.0)
+    p_chart.add_argument("--risk", type=float, default=100.0)
+    p_chart.add_argument(
+        "--min-tier", choices=[t.value for t in Tier], default=Tier.LOW.value,
+    )
+    p_chart.add_argument("--strict-htf", action="store_true")
 
     # Default to `scan` if no subcommand given so old usage keeps working.
     args = p.parse_args(argv)
@@ -194,11 +206,32 @@ async def _run_chart_once(args: argparse.Namespace) -> int:
         direction = signals[-1].direction if signals else Direction.BEARISH
         smt_reading = smt.reading(args.symbol, tf, direction)
 
+    # Optional paper-trade overlay: replay the window through the backtest
+    # engine and surface entry/SL/TP rails plus close markers with failure tags.
+    positions = ()
+    failure_tagger = None
+    if getattr(args, "with_paper", False):
+        from crt.backtest import BacktestRunner
+        from crt.paper import classify as classify_failure
+        runner = BacktestRunner(
+            symbols=[args.symbol], timeframes=[tf],
+            paper_config=PaperConfig(starting_balance=args.balance,
+                                     risk_per_trade=args.risk),
+            min_tier=Tier(args.min_tier) if hasattr(args, "min_tier") else Tier.LOW,
+            require_htf_alignment=getattr(args, "strict_htf", False),
+        )
+        runner.feed(candles + pair_candles)
+        positions = runner.report().positions
+        # `classify_failure` needs the runner's store + SMT to label SL closes.
+        failure_tagger = lambda p: classify_failure(p, runner.store, runner.smt)
+
     write_chart_html(
         candles, signals, out,
         kods=kods, smt_reading=smt_reading,
+        positions=positions, failure_tagger=failure_tagger,
         title=f"{args.symbol} {tf.value}  ·  {len(candles)} bars  "
-              f"·  {len(signals)} signals  ·  {len(kods)} KOD",
+              f"·  {len(signals)} signals  ·  {len(kods)} KOD"
+              + (f"  ·  {len(positions)} positions" if positions else ""),
         refresh_seconds=args.refresh,
     )
     abs_path = out.resolve()
