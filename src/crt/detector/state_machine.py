@@ -21,7 +21,7 @@ from __future__ import annotations
 import statistics
 from collections.abc import Iterable
 
-from crt.models import CRTSubtype, Candle, Direction, Signal, Timeframe, utc_now
+from crt.models import CRTSubtype, Candle, Direction, Signal, Timeframe
 from crt.store import CandleStore
 
 # How many candles to look back when computing the rolling "beefy" baseline.
@@ -66,12 +66,19 @@ def _body_inside(candle: Candle, low: float, high: float) -> bool:
 def _build_signal(
     *,
     range_candle: Candle,
+    trigger_candle: Candle,
     direction: Direction,
     subtype: CRTSubtype,
     purge_price: float,
     confidence: float,
     note: str = "",
 ) -> Signal:
+    """Build a Signal whose `detected_at` is the trigger candle's open time.
+
+    Using the trigger candle's timestamp instead of utc_now() keeps
+    backtest replays consistent — the post-signal candle window is
+    computed against historical times, not the wall clock.
+    """
     crh = range_candle.high
     crl = range_candle.low
     lhf = (crh + crl) / 2.0
@@ -81,7 +88,7 @@ def _build_signal(
         tf=range_candle.tf,
         subtype=subtype,
         direction=direction,
-        detected_at=utc_now(),
+        detected_at=trigger_candle.open_time,
         range_high=crh,
         range_low=crl,
         purge_price=purge_price,
@@ -157,6 +164,7 @@ class CRTDetector:
             if closed_through:
                 return _build_signal(
                     range_candle=range_candle,
+                    trigger_candle=c2,
                     direction=direction,
                     subtype=CRTSubtype.AGGRESSIVE_2,
                     purge_price=c2.low if direction is Direction.BULLISH else c2.high,
@@ -193,6 +201,7 @@ class CRTDetector:
             if broke and len(inside_run) >= 2 and purge_hit_in_inside:
                 return _build_signal(
                     range_candle=range_candle,
+                    trigger_candle=cand,
                     direction=direction,
                     subtype=CRTSubtype.INSIDE_BAR,
                     purge_price=min(c.low for c in inside_run)
@@ -220,6 +229,7 @@ class CRTDetector:
             if c3_closes_through:
                 return _build_signal(
                     range_candle=range_candle,
+                    trigger_candle=c3,
                     direction=direction,
                     subtype=CRTSubtype.CLASSIC_3,
                     purge_price=purge_price,
@@ -248,6 +258,7 @@ class CRTDetector:
                 if c4_closes_through:
                     return _build_signal(
                         range_candle=range_candle,
+                        trigger_candle=c4,
                         direction=direction,
                         subtype=CRTSubtype.THIRD_CANDLE_REVERSAL,
                         purge_price=c2_extreme,
@@ -257,16 +268,19 @@ class CRTDetector:
 
         # Type 3: multi-candle expansion — slowly walking to DOL
         broken_at = None
+        trigger_cand = None
         for j, cand in enumerate(following[1:MAX_LOOKAHEAD], start=2):
             broke = (
                 cand.close > target if direction is Direction.BULLISH else cand.close < target
             )
             if broke:
                 broken_at = j
+                trigger_cand = cand
                 break
-        if broken_at is not None and broken_at >= 3:
+        if broken_at is not None and broken_at >= 3 and trigger_cand is not None:
             return _build_signal(
                 range_candle=range_candle,
+                trigger_candle=trigger_cand,
                 direction=direction,
                 subtype=CRTSubtype.MULTI_CANDLE,
                 purge_price=purge_price,

@@ -83,6 +83,7 @@ class CRTSubtype(str, Enum):
     MULTI_CANDLE = "type_3_multi_candle"
     INSIDE_BAR = "type_4_inside_bar"
     THIRD_CANDLE_REVERSAL = "type_5_third_candle_reversal"
+    MODEL_1 = "model_1_single_trigger"
 
 
 class Direction(str, Enum):
@@ -111,6 +112,10 @@ class Signal:
     # runtime / backtest from crt.context.confluence.score_signal.
     confluence_score: float = 0.0
     confluence_breakdown: dict = field(default_factory=dict)
+    # Optional explicit entry/stop overrides. Used by detectors (Model #1)
+    # whose entry geometry differs from the classic CRT (purge + retrace).
+    entry_override: float | None = None
+    stop_override: float | None = None
 
 
 class PositionStatus(str, Enum):

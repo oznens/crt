@@ -30,7 +30,7 @@ from crt.context import (
     signal_aligned_with_htf,
 )
 from crt.data.mexc import MexcClient
-from crt.detector import CRTDetector
+from crt.detector import CRTDetector, detect_kod, detect_model1, model1_to_signal
 from crt.models import (
     Candle,
     CRTSubtype,
@@ -258,17 +258,47 @@ class BacktestRunner:
         self.store.append(candle)
         for _closed in self.engine.on_candle(candle):
             pass
+        self._check_kod_open_positions(candle.symbol, candle.tf)
         if not passes_time_filter(candle, min_tier=self.min_tier):
             return
-        raw = self.detector.evaluate(candle.symbol, candle.tf)
+        raw: list[Signal] = list(self.detector.evaluate(candle.symbol, candle.tf))
+        window = self.store.get(candle.symbol, candle.tf)
+        emitted_m1 = {
+            (s.symbol, s.detected_at) for s in self.signals
+            if s.subtype is CRTSubtype.MODEL_1
+        }
+        for m1 in detect_model1(window):
+            if (m1.symbol, m1.detected_at) in emitted_m1:
+                continue
+            raw.append(model1_to_signal(m1))
         if not raw:
             return
-        snap = compute_smc(self.store.get(candle.symbol, candle.tf))
+        snap = compute_smc(window)
         for sig in raw:
             if not self._accept_signal(sig, snap):
                 continue
             self.signals.append(sig)
             self.engine.on_signal(sig)
+
+    def _check_kod_open_positions(self, symbol: str, tf: Timeframe) -> None:
+        for pos in self.engine.open_positions:
+            if pos.signal.symbol != symbol or pos.signal.tf != tf:
+                continue
+            if pos.status not in (PositionStatus.OPEN, PositionStatus.TP1):
+                continue
+            if any(n.startswith("KOD") for n in pos.notes):
+                continue
+            window = self.store.get(symbol, tf)
+            after = [c for c in window if c.open_time > pos.signal.detected_at]
+            kod = detect_kod(pos.signal, after)
+            if kod is None:
+                continue
+            old_stop = pos.stop_loss
+            pos.stop_loss = pos.entry_price
+            pos.notes.append(
+                f"KOD confirmed @ {kod.detected_at.isoformat()} — "
+                f"stop {old_stop:.6f} → {pos.entry_price:.6f} (break-even)"
+            )
 
     def _accept_signal(self, sig: Signal, snap) -> bool:
         latest = self.store.latest(sig.symbol, sig.tf)

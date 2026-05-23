@@ -29,7 +29,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from crt.models import Candle, Direction
+from crt.models import CRTSubtype, Candle, Direction, Signal, Timeframe
 
 
 THICK_BODY_MULTIPLIER = 1.5
@@ -138,3 +138,38 @@ def detect_model1(
                 stop_loss=stop, entry=entry, target=target,
             ))
     return out
+
+
+def model1_to_signal(m1: Model1Signal) -> Signal:
+    """Translate a Model1Signal into the runtime's universal Signal so the
+    paper engine, TUI, confluence scorer and chart can all consume it.
+
+    Model #1 uses its own entry/stop geometry (entry at trigger close,
+    stop just past the thick candle's far edge), so we set the
+    entry_override / stop_override fields and leave the CRT-flavored
+    range_high/low pointed at the trigger/thick zone for chart overlays.
+    """
+    if m1.direction is Direction.BULLISH:
+        # Bullish trigger: thick is bearish; entry above thick.high.
+        range_high = m1.trigger_candle.high
+        range_low = m1.thick_candle.low
+        lhf = (m1.entry + m1.target) / 2
+        initial_dol = m1.target
+    else:
+        range_high = m1.thick_candle.high
+        range_low = m1.trigger_candle.low
+        lhf = (m1.entry + m1.target) / 2
+        initial_dol = m1.target
+
+    return Signal(
+        symbol=m1.symbol, tf=Timeframe(m1.tf),
+        subtype=CRTSubtype.MODEL_1, direction=m1.direction,
+        detected_at=m1.detected_at,
+        range_high=range_high, range_low=range_low,
+        purge_price=m1.swept_level,
+        confidence=0.7,
+        lhf=lhf, initial_dol=initial_dol,
+        note=m1.note,
+        entry_override=m1.entry,
+        stop_override=m1.stop_loss,
+    )

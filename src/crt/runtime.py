@@ -21,8 +21,8 @@ from crt.context import (
 )
 from crt.data.mexc import MexcClient
 from crt.data.mexc_ws import MexcWsStream
-from crt.detector import CRTDetector
-from crt.models import Candle, Signal, Timeframe
+from crt.detector import CRTDetector, detect_kod, detect_model1, model1_to_signal
+from crt.models import Candle, PositionStatus, Signal, Timeframe
 from crt.paper import PaperEngine
 from crt.smc import compute as compute_smc
 from crt.store import CandleStore
@@ -82,21 +82,56 @@ class Runtime:
         self.store.append(candle)
         for closed in self.engine.on_candle(candle):
             log.info("position closed: %s status=%s", closed.signal.symbol, closed.status.value)
+        # KOD: tighten stops on open positions when a final-TS confirmation prints.
+        self._check_kod_for_open_positions(candle.symbol, candle.tf)
         # Time-window gate: don't waste cycles on low-tier candles unless the
         # operator has dialed the threshold all the way down.
         if not passes_time_filter(candle, min_tier=self.min_tier):
             return
-        raw = self.detector.evaluate(candle.symbol, candle.tf)
+        # Collect signals from BOTH the CRT subtype state machine and the
+        # orthogonal Model #1 detector.
+        raw: list[Signal] = list(self.detector.evaluate(candle.symbol, candle.tf))
+        window = self.store.get(candle.symbol, candle.tf)
+        for m1 in detect_model1(window):
+            # Skip if we already emitted a Model #1 signal for this trigger
+            # candle on a prior tick.
+            if any(
+                s.subtype.value == "model_1_single_trigger"
+                and s.detected_at == m1.detected_at
+                for s in self.dashboard.recent_signals
+            ):
+                continue
+            raw.append(model1_to_signal(m1))
         if not raw:
             return
-        # Compute the SMC stack once per evaluating candle and reuse it
-        # across every signal emitted on this tick.
-        snap = compute_smc(self.store.get(candle.symbol, candle.tf))
+        snap = compute_smc(window)
         for sig in raw:
             if not self._accept_signal(sig, snap):
                 continue
             self.dashboard.push_signal(sig)
             self.engine.on_signal(sig)
+
+    def _check_kod_for_open_positions(self, symbol: str, tf: Timeframe) -> None:
+        for pos in self.engine.open_positions:
+            if pos.signal.symbol != symbol or pos.signal.tf != tf:
+                continue
+            if pos.status not in (PositionStatus.OPEN, PositionStatus.TP1):
+                continue
+            if any(n.startswith("KOD") for n in pos.notes):
+                continue
+            window = self.store.get(symbol, tf)
+            after = [c for c in window if c.open_time > pos.signal.detected_at]
+            kod = detect_kod(pos.signal, after)
+            if kod is None:
+                continue
+            old_stop = pos.stop_loss
+            pos.stop_loss = pos.entry_price  # break-even
+            pos.notes.append(
+                f"KOD confirmed @ {kod.detected_at.isoformat()} — "
+                f"stop {old_stop:.6f} → {pos.entry_price:.6f} (break-even)"
+            )
+            log.info("KOD confirmed %s %s: stop moved to break-even",
+                     symbol, tf.value)
 
     def _accept_signal(self, sig: Signal, snap) -> bool:
         tier = candle_tier(self.store.latest(sig.symbol, sig.tf))

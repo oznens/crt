@@ -82,10 +82,13 @@ class PaperEngine:
     # ----------------------------------------------------------------- helpers
 
     def _entry_and_stop(self, sig: Signal) -> tuple[float, float]:
+        # Detectors with explicit geometry (e.g. Model #1) can override entry
+        # and stop directly; otherwise we use the classic CRT retrace logic.
+        if sig.entry_override is not None and sig.stop_override is not None:
+            return sig.entry_override, sig.stop_override
         range_size = sig.range_high - sig.range_low
         buffer = range_size * self.config.sl_buffer_pct
         if sig.direction is Direction.BULLISH:
-            # entry just above the engineered range low after the purge
             entry = sig.range_low + range_size * 0.1
             stop = sig.purge_price - buffer
         else:
