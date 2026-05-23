@@ -210,40 +210,10 @@ class CRTDetector:
             return None
         purge_price = c2.low if direction is Direction.BULLISH else c2.high
 
-        # Type 5: 3rd candle manipulates C2's extreme, then distributes
-        if len(following) >= 3:
-            c3 = following[1]
-            c2_extreme = c2.high if direction is Direction.BULLISH else c2.low
-            c3_wicks_c2 = (
-                c3.high > c2.high if direction is Direction.BULLISH else c3.low < c2.low
-            )
-            target = crh if direction is Direction.BULLISH else crl
-            c3_closes_through = (
-                c3.close > target if direction is Direction.BULLISH else c3.close < target
-            )
-            # Distribute via C4
-            if c3_wicks_c2 and len(following) >= 3:
-                c4 = following[2] if len(following) > 2 else None
-                if c4 is not None:
-                    c4_closes_through = (
-                        c4.close > target
-                        if direction is Direction.BULLISH
-                        else c4.close < target
-                    )
-                    if c4_closes_through:
-                        return _build_signal(
-                            range_candle=range_candle,
-                            direction=direction,
-                            subtype=CRTSubtype.THIRD_CANDLE_REVERSAL,
-                            purge_price=c2_extreme,
-                            confidence=0.55,
-                            note="C3 manipulates C2, C4 distributes",
-                        )
-
-        # Type 1: classic — C3 closes past opposite extreme
+        # Type 1: classic — C3 closes past opposite extreme (preferred over Type 5)
+        target = crh if direction is Direction.BULLISH else crl
         if len(following) >= 2:
             c3 = following[1]
-            target = crh if direction is Direction.BULLISH else crl
             c3_closes_through = (
                 c3.close > target if direction is Direction.BULLISH else c3.close < target
             )
@@ -257,8 +227,35 @@ class CRTDetector:
                     note="C2 purge, C3 expansion",
                 )
 
+        # Type 5: 3rd candle manipulates C2's extreme but does NOT itself close
+        # through the opposite extreme — C4 has to do the distribution.
+        if len(following) >= 3:
+            c3 = following[1]
+            c2_extreme = c2.high if direction is Direction.BULLISH else c2.low
+            c3_wicks_c2 = (
+                c3.high > c2.high if direction is Direction.BULLISH else c3.low < c2.low
+            )
+            c3_closes_through = (
+                c3.close > target if direction is Direction.BULLISH else c3.close < target
+            )
+            if c3_wicks_c2 and not c3_closes_through:
+                c4 = following[2]
+                c4_closes_through = (
+                    c4.close > target
+                    if direction is Direction.BULLISH
+                    else c4.close < target
+                )
+                if c4_closes_through:
+                    return _build_signal(
+                        range_candle=range_candle,
+                        direction=direction,
+                        subtype=CRTSubtype.THIRD_CANDLE_REVERSAL,
+                        purge_price=c2_extreme,
+                        confidence=0.55,
+                        note="C3 manipulates C2, C4 distributes",
+                    )
+
         # Type 3: multi-candle expansion — slowly walking to DOL
-        target = crh if direction is Direction.BULLISH else crl
         broken_at = None
         for j, cand in enumerate(following[1:MAX_LOOKAHEAD], start=2):
             broke = (

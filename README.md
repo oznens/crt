@@ -36,14 +36,20 @@ Reference material:
 ```bash
 pip install -e .[dev]
 
-# auto-pick the top 50 USDT perpetuals by 24h volume (default)
-crt --tf 15m 1h 4h
+# Live scanner (default): top 50 USDT perpetuals by 24h volume
+crt scan --tf 15m 1h 4h
 
-# or pin an explicit watchlist
-crt --symbols BTC_USDT ETH_USDT SOL_USDT --tf 15m 1h 4h
+# Pin an explicit watchlist
+crt scan --symbols BTC_USDT ETH_USDT SOL_USDT --tf 15m 1h 4h
 
-# adjust universe size
-crt --top 30 --tf 15m 1h
+# Smaller universe
+crt scan --top 30 --tf 15m 1h
+
+# Tighter signal filtering (NY kill-zone only)
+crt scan --min-tier high --strict-htf
+
+# Backtest the last N bars per (symbol, tf) and print a summary report
+crt backtest --top 20 --tf 1h --bars 1000
 ```
 
 ## Tests
