@@ -102,11 +102,15 @@ class Signal:
     range_high: float  # CRH
     range_low: float   # CRL
     purge_price: float  # extreme of the purge wick beyond CRH/CRL
-    confidence: float   # 0..1
+    confidence: float   # 0..1, the detector's geometric confidence
     lhf: float          # Low Hanging Fruit = 50% of range candle
     initial_dol: float  # opposite extreme (CRH for bullish, CRL for bearish)
     extended_dol: float | None = None  # next external SSL/BSL if known
     note: str = ""
+    # Confluence score attached after detection. Lazily filled by the
+    # runtime / backtest from crt.context.confluence.score_signal.
+    confluence_score: float = 0.0
+    confluence_breakdown: dict = field(default_factory=dict)
 
 
 class PositionStatus(str, Enum):

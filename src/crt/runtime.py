@@ -12,9 +12,11 @@ import asyncio
 import logging
 
 from crt.context import (
+    SMTMonitor,
     Tier,
     candle_tier,
     passes_time_filter,
+    score_signal,
     signal_aligned_with_htf,
 )
 from crt.data.mexc import MexcClient
@@ -22,6 +24,7 @@ from crt.data.mexc_ws import MexcWsStream
 from crt.detector import CRTDetector
 from crt.models import Candle, Signal, Timeframe
 from crt.paper import PaperEngine
+from crt.smc import compute as compute_smc
 from crt.store import CandleStore
 from crt.tui import Dashboard
 
@@ -40,6 +43,7 @@ class Runtime:
         *,
         min_tier: Tier = Tier.MEDIUM,
         require_htf_alignment: bool = False,
+        min_confluence: float = float("-inf"),
     ):
         self.symbols = symbols
         self.timeframes = timeframes
@@ -48,6 +52,8 @@ class Runtime:
         self.detector = CRTDetector(self.store)
         self.min_tier = min_tier
         self.require_htf_alignment = require_htf_alignment
+        self.min_confluence = min_confluence
+        self.smt = SMTMonitor(self.store)
         self.dashboard = Dashboard(
             self.store,
             self.engine,
@@ -80,13 +86,19 @@ class Runtime:
         # operator has dialed the threshold all the way down.
         if not passes_time_filter(candle, min_tier=self.min_tier):
             return
-        for sig in self.detector.evaluate(candle.symbol, candle.tf):
-            if not self._accept_signal(sig):
+        raw = self.detector.evaluate(candle.symbol, candle.tf)
+        if not raw:
+            return
+        # Compute the SMC stack once per evaluating candle and reuse it
+        # across every signal emitted on this tick.
+        snap = compute_smc(self.store.get(candle.symbol, candle.tf))
+        for sig in raw:
+            if not self._accept_signal(sig, snap):
                 continue
             self.dashboard.push_signal(sig)
             self.engine.on_signal(sig)
 
-    def _accept_signal(self, sig: Signal) -> bool:
+    def _accept_signal(self, sig: Signal, snap) -> bool:
         tier = candle_tier(self.store.latest(sig.symbol, sig.tf))
         sig.note = f"tier={tier.value}; {sig.note}".strip("; ")
         if not signal_aligned_with_htf(
@@ -95,6 +107,14 @@ class Runtime:
         ):
             log.debug("signal rejected (HTF disagree): %s %s %s",
                       sig.symbol, sig.tf.value, sig.direction.value)
+            return False
+        score = score_signal(sig, self.store, snap, self.smt)
+        sig.confluence_score = score.total
+        sig.confluence_breakdown = dict(score.components)
+        if sig.confluence_score < self.min_confluence:
+            log.debug("signal rejected (confluence %.1f < %.1f): %s %s",
+                      sig.confluence_score, self.min_confluence,
+                      sig.symbol, sig.tf.value)
             return False
         return True
 

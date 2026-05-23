@@ -84,8 +84,14 @@ class Dashboard:
         table.add_column("CRH", justify="right")
         table.add_column("CRL", justify="right")
         table.add_column("Conf", justify="right")
+        table.add_column("Confl", justify="right")
         for s in reversed(self.recent_signals):
             dir_style = "green" if s.direction.value == "bullish" else "red"
+            conf_style = (
+                "bold green" if s.confluence_score >= 5
+                else "yellow" if s.confluence_score >= 1
+                else "red"
+            )
             table.add_row(
                 _fmt_dt(s.detected_at),
                 s.symbol,
@@ -95,6 +101,7 @@ class Dashboard:
                 _fmt(s.range_high, 4),
                 _fmt(s.range_low, 4),
                 f"{s.confidence:.2f}",
+                f"[{conf_style}]{s.confluence_score:+.1f}[/{conf_style}]",
             )
         return Panel(table, title="Signals", border_style="magenta")
 

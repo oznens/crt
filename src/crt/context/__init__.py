@@ -6,6 +6,8 @@ from crt.context.alignment import (
     parent_tf,
     signal_aligned_with_htf,
 )
+from crt.context.confluence import ConfluenceScore, score_signal
+from crt.context.smt import SMTMonitor, SMTReading, SMTState
 from crt.context.time_windows import (
     Tier,
     candle_tier,
@@ -28,4 +30,9 @@ __all__ = [
     "latest_htf_candle",
     "parent_tf",
     "signal_aligned_with_htf",
+    "ConfluenceScore",
+    "score_signal",
+    "SMTMonitor",
+    "SMTReading",
+    "SMTState",
 ]

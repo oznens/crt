@@ -22,9 +22,11 @@ from datetime import datetime
 from typing import Iterable
 
 from crt.context import (
+    SMTMonitor,
     Tier,
     candle_tier,
     passes_time_filter,
+    score_signal,
     signal_aligned_with_htf,
 )
 from crt.data.mexc import MexcClient
@@ -39,6 +41,7 @@ from crt.models import (
     Timeframe,
 )
 from crt.paper import PaperConfig, PaperEngine
+from crt.smc import compute as compute_smc
 from crt.store import CandleStore
 
 
@@ -111,6 +114,37 @@ class BacktestReport:
             worst = min(worst, equity - peak)
         return worst
 
+    @property
+    def avg_confluence(self) -> float:
+        if not self.signals:
+            return 0.0
+        return statistics.mean(s.confluence_score for s in self.signals)
+
+    def by_confluence_bucket(self) -> dict[str, dict]:
+        """Bucket positions by confluence score so we can see if higher
+        confluence actually correlates with better realized PnL."""
+        buckets: dict[str, dict] = {}
+        for p in self.positions:
+            score = p.signal.confluence_score
+            if score <= 0:
+                key = "≤0"
+            elif score <= 3:
+                key = "1–3"
+            elif score <= 6:
+                key = "4–6"
+            else:
+                key = "≥7"
+            b = buckets.setdefault(
+                key, {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+            )
+            b["trades"] += 1
+            b["pnl"] += p.realized_pnl
+            if p.status == PositionStatus.CLOSED_TP:
+                b["wins"] += 1
+            elif p.status == PositionStatus.CLOSED_SL:
+                b["losses"] += 1
+        return buckets
+
     def by_subtype(self) -> dict[CRTSubtype, dict]:
         """Win-rate breakdown per CRT subtype."""
         agg: dict[CRTSubtype, dict] = {}
@@ -137,6 +171,7 @@ class BacktestRunner:
     paper_config: PaperConfig = field(default_factory=PaperConfig)
     min_tier: Tier = Tier.MEDIUM
     require_htf_alignment: bool = False
+    min_confluence: float = float("-inf")
     store: CandleStore = field(default_factory=CandleStore)
     engine: PaperEngine = field(init=False)
     detector: CRTDetector = field(init=False)
@@ -145,6 +180,7 @@ class BacktestRunner:
     def __post_init__(self) -> None:
         self.engine = PaperEngine(self.paper_config)
         self.detector = CRTDetector(self.store)
+        self.smt = SMTMonitor(self.store)
 
     # ------------------------------------------------------------------ feed
 
@@ -197,22 +233,31 @@ class BacktestRunner:
             pass
         if not passes_time_filter(candle, min_tier=self.min_tier):
             return
-        for sig in self.detector.evaluate(candle.symbol, candle.tf):
-            if not self._accept_signal(sig):
+        raw = self.detector.evaluate(candle.symbol, candle.tf)
+        if not raw:
+            return
+        snap = compute_smc(self.store.get(candle.symbol, candle.tf))
+        for sig in raw:
+            if not self._accept_signal(sig, snap):
                 continue
             self.signals.append(sig)
             self.engine.on_signal(sig)
 
-    def _accept_signal(self, sig: Signal) -> bool:
+    def _accept_signal(self, sig: Signal, snap) -> bool:
         latest = self.store.latest(sig.symbol, sig.tf)
         if latest is None:
             return False
         tier = candle_tier(latest)
         sig.note = f"tier={tier.value}; {sig.note}".strip("; ")
-        return signal_aligned_with_htf(
+        if not signal_aligned_with_htf(
             self.store, sig.symbol, sig.tf, sig.direction,
             require=self.require_htf_alignment,
-        )
+        ):
+            return False
+        score = score_signal(sig, self.store, snap, self.smt)
+        sig.confluence_score = score.total
+        sig.confluence_breakdown = dict(score.components)
+        return sig.confluence_score >= self.min_confluence
 
 
 def format_report(r: BacktestReport) -> str:
@@ -227,6 +272,7 @@ def format_report(r: BacktestReport) -> str:
     lines.append(f"Avg win: {r.avg_win:+.2f}  Avg loss: {r.avg_loss:+.2f}")
     lines.append(f"Expectancy/trade: {r.expectancy:+.2f}")
     lines.append(f"Max drawdown: {r.max_drawdown:+.2f}")
+    lines.append(f"Avg confluence: {r.avg_confluence:+.2f}")
     breakdown = r.by_subtype()
     if breakdown:
         lines.append("")
@@ -235,6 +281,17 @@ def format_report(r: BacktestReport) -> str:
             wr = (b["wins"] / (b["wins"] + b["losses"]) * 100) if (b["wins"] + b["losses"]) else 0
             lines.append(
                 f"  {st.value:<32} trades={b['trades']:<3} "
+                f"W={b['wins']:<3} L={b['losses']:<3} "
+                f"WR={wr:5.1f}%  pnl={b['pnl']:+.2f}"
+            )
+    conf = r.by_confluence_bucket()
+    if conf:
+        lines.append("")
+        lines.append("By confluence:")
+        for bucket, b in sorted(conf.items()):
+            wr = (b["wins"] / (b["wins"] + b["losses"]) * 100) if (b["wins"] + b["losses"]) else 0
+            lines.append(
+                f"  score {bucket:<6} trades={b['trades']:<3} "
                 f"W={b['wins']:<3} L={b['losses']:<3} "
                 f"WR={wr:5.1f}%  pnl={b['pnl']:+.2f}"
             )

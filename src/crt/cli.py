@@ -45,6 +45,10 @@ def _shared_universe_args(p: argparse.ArgumentParser) -> None:
         "--strict-htf", action="store_true",
         help="Require parent HTF candle bias to agree with signal direction",
     )
+    p.add_argument(
+        "--min-confluence", type=float, default=-1e9,
+        help="Drop signals with a confluence score below this threshold (default: no floor)",
+    )
     p.add_argument("--balance", type=float, default=10_000.0)
     p.add_argument("--risk", type=float, default=100.0, help="USD risked per trade")
 
@@ -116,6 +120,7 @@ async def _run_scan(args: argparse.Namespace) -> int:
         symbols=symbols, timeframes=timeframes, engine=engine,
         min_tier=Tier(args.min_tier),
         require_htf_alignment=args.strict_htf,
+        min_confluence=args.min_confluence,
     )
     try:
         await runtime.run()
@@ -134,6 +139,7 @@ async def _run_backtest(args: argparse.Namespace) -> int:
         paper_config=PaperConfig(starting_balance=args.balance, risk_per_trade=args.risk),
         min_tier=Tier(args.min_tier),
         require_htf_alignment=args.strict_htf,
+        min_confluence=args.min_confluence,
     )
     async with MexcClient() as client:
         await runner.load_from_mexc(client, limit_per_tf=args.bars)
