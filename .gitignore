@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.local
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.log
+.DS_Store
+
+# local data caches
+data/
+cache/
+*.parquet
+*.csv
+!docs/**/*.csv
+
+# editor
+.vscode/
+.idea/
