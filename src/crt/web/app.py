@@ -456,9 +456,15 @@ class WebDashboard:
         self.watch = list(watch)
         self.recent_signals: deque[Signal] = deque(maxlen=max_signals)
         self.smt = SMTMonitor(store)
+        # Latest mid/last price per symbol, fed from the ticker stream.
+        # Drives live watchlist + setup-card refreshes between candle closes.
+        self.last_prices: dict[str, float] = {}
 
     def push_signal(self, s: Signal) -> None:
         self.recent_signals.append(s)
+
+    def on_tick(self, symbol: str, price: float) -> None:
+        self.last_prices[symbol] = price
 
     # ----------------------------------------------- snapshot for /api/state
 
@@ -466,14 +472,19 @@ class WebDashboard:
         watchlist = []
         for sym, tf in self.watch:
             candles = self.store.get(sym, tf, count=2)
+            # Prefer the live ticker price over the last closed candle so
+            # the watchlist tick along between candle closes.
+            live = self.last_prices.get(sym)
             if len(candles) < 2:
-                watchlist.append({"symbol": sym, "tf": tf.value, "last": "—", "chg": 0.0})
+                last_str = f"{live:.4f}" if live is not None else "—"
+                watchlist.append({"symbol": sym, "tf": tf.value, "last": last_str, "chg": 0.0})
                 continue
             cur, prev = candles[-1], candles[-2]
-            chg = (cur.close - prev.close) / prev.close * 100 if prev.close else 0.0
+            last_price = live if live is not None else cur.close
+            chg = (last_price - prev.close) / prev.close * 100 if prev.close else 0.0
             watchlist.append({
                 "symbol": sym, "tf": tf.value,
-                "last": f"{cur.close:.4f}", "chg": chg,
+                "last": f"{last_price:.4f}", "chg": chg,
             })
 
         closed = self.engine.closed_positions

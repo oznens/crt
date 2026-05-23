@@ -189,6 +189,7 @@ class BacktestRunner:
     min_tier: Tier = Tier.MEDIUM
     require_htf_alignment: bool = False
     min_confluence: float = float("-inf")
+    require_smc_grounding: bool = True
     store: CandleStore = field(default_factory=CandleStore)
     engine: PaperEngine = field(init=False)
     detector: CRTDetector = field(init=False)
@@ -316,6 +317,14 @@ class BacktestRunner:
         score = score_signal(sig, self.store, snap, self.smt)
         sig.confluence_score = score.total
         sig.confluence_breakdown = dict(score.components)
+        if self.require_smc_grounding:
+            smc_grounded = any(
+                k in score.components
+                for k in ("fvg_aligned", "ob_aligned", "bos_aligned",
+                          "liquidity_swept", "smt_aligned")
+            )
+            if not smc_grounded:
+                return False
         return sig.confluence_score >= self.min_confluence
 
 

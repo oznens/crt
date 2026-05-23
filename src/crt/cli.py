@@ -52,8 +52,10 @@ def _shared_universe_args(p: argparse.ArgumentParser) -> None:
         help="Require parent HTF candle bias to agree with signal direction",
     )
     p.add_argument(
-        "--min-confluence", type=float, default=-1e9,
-        help="Drop signals with a confluence score below this threshold (default: no floor)",
+        "--min-confluence", type=float, default=2.0,
+        help="Drop signals with confluence score below this threshold "
+             "(default: 2.0 = require at least HIGH-tier + one SMC confluence). "
+             "Use -1e9 to disable.",
     )
     p.add_argument("--balance", type=float, default=10_000.0)
     p.add_argument("--risk", type=float, default=100.0, help="USD risked per trade")

@@ -20,7 +20,7 @@ from crt.context import (
     signal_aligned_with_htf,
 )
 from crt.data.bybit import BybitClient
-from crt.data.bybit_ws import BybitWsStream
+from crt.data.bybit_ws import BybitTickerStream, BybitWsStream
 from crt.detector import CRTDetector, detect_kod, detect_model1, model1_to_signal
 from crt.models import Candle, PositionStatus, Signal, Timeframe
 from crt.paper import PaperEngine
@@ -44,6 +44,7 @@ class Runtime:
         min_tier: Tier = Tier.MEDIUM,
         require_htf_alignment: bool = False,
         min_confluence: float = float("-inf"),
+        require_smc_grounding: bool = True,
         web_dashboard=None,
     ):
         self.symbols = symbols
@@ -54,6 +55,7 @@ class Runtime:
         self.min_tier = min_tier
         self.require_htf_alignment = require_htf_alignment
         self.min_confluence = min_confluence
+        self.require_smc_grounding = require_smc_grounding
         self.smt = SMTMonitor(self.store)
         self.dashboard = Dashboard(
             self.store,
@@ -182,6 +184,19 @@ class Runtime:
         score = score_signal(sig, self.store, snap, self.smt)
         sig.confluence_score = score.total
         sig.confluence_breakdown = dict(score.components)
+        if self.require_smc_grounding:
+            # Hard prerequisite: a CRT must sit on real SMC context. A
+            # signal whose only positive contributors are time tier + HTF
+            # alignment is just a candle pattern in the middle of nowhere.
+            smc_grounded = any(
+                k in score.components
+                for k in ("fvg_aligned", "ob_aligned", "bos_aligned",
+                          "liquidity_swept", "smt_aligned")
+            )
+            if not smc_grounded:
+                log.debug("signal rejected (no SMC context): %s %s",
+                          sig.symbol, sig.tf.value)
+                return False
         if sig.confluence_score < self.min_confluence:
             log.debug("signal rejected (confluence %.1f < %.1f): %s %s",
                       sig.confluence_score, self.min_confluence,
@@ -194,34 +209,56 @@ class Runtime:
             await self.bootstrap(client)
 
         pairs = [(s, tf) for s in self.symbols for tf in self.timeframes]
-        async with BybitWsStream(pairs) as stream, self.dashboard.live() as live:
-            consumer = asyncio.create_task(self._consume(stream))
+        async with (
+            BybitWsStream(pairs) as kline_stream,
+            BybitTickerStream(self.symbols) as ticker_stream,
+            self.dashboard.live() as live,
+        ):
+            kline_task = asyncio.create_task(self._consume_klines(kline_stream))
+            tick_task = asyncio.create_task(self._consume_ticks(ticker_stream))
             try:
-                while not consumer.done():
+                while not (kline_task.done() and tick_task.done()):
                     live.update(self.dashboard.render(), refresh=True)
                     await asyncio.sleep(0.5)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 pass
             finally:
-                consumer.cancel()
-                await asyncio.gather(consumer, return_exceptions=True)
+                kline_task.cancel()
+                tick_task.cancel()
+                await asyncio.gather(kline_task, tick_task, return_exceptions=True)
 
     async def run_headless(self) -> None:
         """Run the data → detector → paper pipeline without the Rich TUI.
 
-        Intended to be paired with the web dashboard so the FastAPI app
-        can scrape live state from the same store / engine without the
-        terminal taking over stdout.
+        Spawns BOTH the kline stream (detector + paper engine) AND the
+        ticker stream (intra-candle uPnL + SL/TP tripwires) so the web
+        dashboard sees live PnL between candle closes.
         """
         async with BybitClient() as client:
             await self.bootstrap(client)
         pairs = [(s, tf) for s in self.symbols for tf in self.timeframes]
-        async with BybitWsStream(pairs) as stream:
-            async for candle in stream:
-                self.on_candle(candle)
+        async with (
+            BybitWsStream(pairs) as kline_stream,
+            BybitTickerStream(self.symbols) as ticker_stream,
+        ):
+            await asyncio.gather(
+                self._consume_klines(kline_stream),
+                self._consume_ticks(ticker_stream),
+            )
 
     # --------------------------------------------------------------- private
 
-    async def _consume(self, stream: BybitWsStream) -> None:
+    async def _consume_klines(self, stream: BybitWsStream) -> None:
         async for candle in stream:
             self.on_candle(candle)
+
+    async def _consume_ticks(self, stream: BybitTickerStream) -> None:
+        """Forward every ticker push into the paper engine for live uPnL
+        and intra-candle SL/TP. Ticker fires ~once per second per symbol;
+        the engine call is cheap enough to handle that cadence."""
+        async for symbol, price in stream:
+            self.engine.on_tick(symbol, price)
+            # Update web dashboard's last-price cache (if mounted) so the
+            # watchlist shows live prices, not stale candle closes.
+            if self.web_dashboard is not None:
+                self.web_dashboard.on_tick(symbol, price)

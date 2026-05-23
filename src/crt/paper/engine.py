@@ -103,6 +103,106 @@ class PaperEngine:
         )
         return pending
 
+    def on_tick(self, symbol: str, price: float) -> list[PaperPosition]:
+        """Process a live ticker update for `symbol`.
+
+        Each open position on this symbol (any TF) gets its unrealized
+        PnL refreshed, and we also check SL/TP intra-candle so a stop
+        fires the moment price reaches it instead of waiting for the
+        candle close. Pending limit orders are filled if the tick
+        crosses the entry. Returns positions that closed on this tick.
+        """
+        ended: list[PaperPosition] = []
+        # Pending orders: tick can fill, cancel-via-stop, or be ignored.
+        for pending in list(self.pending_orders):
+            if pending.signal.symbol != symbol:
+                continue
+            bull = pending.side is Direction.BULLISH
+            # Stop reached first → cancel.
+            if (bull and price <= pending.stop_loss) or (
+                not bull and price >= pending.stop_loss
+            ):
+                pending.status = PositionStatus.PENDING_CANCELLED
+                pending.notes.append(
+                    f"PENDING cancelled (tick) — price {price:.6f} reached stop "
+                    f"{pending.stop_loss:.6f} before fill"
+                )
+                self.pending_orders.remove(pending)
+                self.closed_positions.append(pending)
+                ended.append(pending)
+                continue
+            # Entry touched → fill.
+            # A tick fills the limit if the price has reached the entry
+            # from the right side.
+            if (bull and price <= pending.entry_price) or (
+                not bull and price >= pending.entry_price
+            ):
+                pending.status = PositionStatus.OPEN
+                pending.filled_at = utc_now()
+                pending.notes.append(f"FILLED (tick) @ {price:.6f}")
+                self.pending_orders.remove(pending)
+                self.open_positions.append(pending)
+
+        # Open positions: mark-to-market + intra-candle SL/TP.
+        for pos in list(self.open_positions):
+            if pos.signal.symbol != symbol:
+                continue
+            bull = pos.side is Direction.BULLISH
+            # SL check.
+            if (bull and price <= pos.stop_loss) or (
+                not bull and price >= pos.stop_loss
+            ):
+                self._close_at_price(pos, pos.stop_loss, PositionStatus.CLOSED_SL)
+                self.open_positions.remove(pos)
+                self.closed_positions.append(pos)
+                ended.append(pos)
+                continue
+            tp1, tp2 = pos.take_profits[0], pos.take_profits[1]
+            # TP2 (final close).
+            if (bull and price >= tp2) or (not bull and price <= tp2):
+                self._close_at_price(pos, tp2, PositionStatus.CLOSED_TP)
+                self.open_positions.remove(pos)
+                self.closed_positions.append(pos)
+                ended.append(pos)
+                continue
+            # TP1 (trail to break-even).
+            if pos.status == PositionStatus.OPEN and (
+                (bull and price >= tp1) or (not bull and price <= tp1)
+            ):
+                pos.status = PositionStatus.TP1
+                old_stop = pos.stop_loss
+                if (bull and pos.stop_loss < pos.entry_price) or (
+                    not bull and pos.stop_loss > pos.entry_price
+                ):
+                    pos.stop_loss = pos.entry_price
+                pos.notes.append(
+                    f"TP1 hit (tick) @ {tp1:.6f} — stop {old_stop:.6f} → "
+                    f"{pos.stop_loss:.6f} (break-even)"
+                )
+            # Refresh unrealized PnL with the live price.
+            pnl = (price - pos.entry_price) * pos.size
+            if not bull:
+                pnl = -pnl
+            pos.unrealized_pnl = pnl
+        return ended
+
+    def _close_at_price(
+        self, pos: PaperPosition, price: float, status: PositionStatus,
+    ) -> None:
+        pnl = (price - pos.entry_price) * pos.size
+        if pos.side is Direction.BEARISH:
+            pnl = -pnl
+        pos.realized_pnl = pnl
+        pos.unrealized_pnl = 0.0
+        pos.status = status
+        pos.closed_at = utc_now()
+        self.balance += pnl
+        log.info(
+            "PAPER CLOSE (tick) %s %s %s @ %.6f pnl=%.2f balance=%.2f",
+            pos.signal.symbol, pos.signal.tf.value, status.value,
+            price, pnl, self.balance,
+        )
+
     def on_candle(self, candle: Candle) -> list[PaperPosition]:
         """Process pending orders + filled positions for this symbol/tf.
 

@@ -63,6 +63,7 @@ def test_backtest_emits_model1_signals_when_present():
         symbols=[SYM], timeframes=[TF],
         paper_config=PaperConfig(risk_per_trade=100.0),
         min_tier=Tier.LOW,
+        require_smc_grounding=False,
     )
     runner.feed(_bullish_model1_sequence(start))
     report = runner.report()
@@ -100,6 +101,7 @@ def test_kod_moves_stop_to_break_even_in_backtest():
         symbols=[SYM], timeframes=[TF],
         paper_config=PaperConfig(risk_per_trade=100.0),
         min_tier=Tier.LOW,
+        require_smc_grounding=False,
     )
     runner.feed(filler + [c1, c2, c3, c4, kod_spike, kod_confirm])
     report = runner.report()

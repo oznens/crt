@@ -105,12 +105,20 @@ def _position_shapes_and_annotations(
     last_ts,
     failure_tagger=None,
 ) -> tuple[list[dict], list[dict]]:
-    """Draw each closed paper position's entry / SL / TP rails plus a close
-    marker. If the position hit SL, annotate it with the failure mode."""
+    """Draw each FILLED paper position's entry / SL / TP rails plus a close
+    marker. Pending orders that expired or were cancelled before fill are
+    skipped — they never traded so showing rails for them is just noise."""
     shapes: list[dict] = []
     annotations: list[dict] = []
+    SKIP_STATES = {
+        PositionStatus.PENDING,
+        PositionStatus.PENDING_EXPIRED,
+        PositionStatus.PENDING_CANCELLED,
+    }
     for pos in positions:
-        x0 = pos.opened_at
+        if pos.status in SKIP_STATES:
+            continue
+        x0 = pos.filled_at or pos.opened_at
         x1 = pos.closed_at or last_ts
         # Entry rail (blue dashed)
         shapes.append(dict(

@@ -65,6 +65,7 @@ def test_parallel_backtest_aggregates_per_symbol_reports():
         client, ["BTC_USDT", "SOL_USDT"], [tf],
         paper_config=PaperConfig(starting_balance=10_000.0, risk_per_trade=100.0),
         min_tier=Tier.LOW,
+        require_smc_grounding=False,
         bars=60,
         concurrency=2,
     ))

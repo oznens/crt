@@ -47,6 +47,7 @@ def test_backtest_report_records_a_winner():
         symbols=[SYM], timeframes=[TF],
         paper_config=PaperConfig(starting_balance=10_000.0, risk_per_trade=100.0),
         min_tier=Tier.LOW,
+        require_smc_grounding=False,
     )
     runner.feed(_bullish_classic_sequence(start))
     report = runner.report()
@@ -66,6 +67,7 @@ def test_backtest_report_records_a_loser_and_max_drawdown():
         symbols=[SYM], timeframes=[TF],
         paper_config=PaperConfig(starting_balance=10_000.0, risk_per_trade=100.0),
         min_tier=Tier.LOW,
+        require_smc_grounding=False,
     )
     runner.feed(_classic_then_stop_sequence(start))
     report = runner.report()
@@ -81,6 +83,7 @@ def test_backtest_breakdown_buckets_by_subtype():
         symbols=[SYM], timeframes=[TF],
         paper_config=PaperConfig(starting_balance=10_000.0, risk_per_trade=100.0),
         min_tier=Tier.LOW,
+        require_smc_grounding=False,
     )
     runner.feed(_bullish_classic_sequence(start))
     breakdown = runner.report().by_subtype()
@@ -116,6 +119,7 @@ def test_format_report_returns_multiline_summary():
         symbols=[SYM], timeframes=[TF],
         paper_config=PaperConfig(starting_balance=10_000.0, risk_per_trade=100.0),
         min_tier=Tier.LOW,
+        require_smc_grounding=False,
     )
     runner.feed(_bullish_classic_sequence(start))
     text = format_report(runner.report())

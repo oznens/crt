@@ -107,6 +107,7 @@ async def parallel_backtest(
     min_tier: Tier = Tier.MEDIUM,
     require_htf_alignment: bool = False,
     min_confluence: float = float("-inf"),
+    require_smc_grounding: bool = True,
     bars: int = 500,
     concurrency: int = DEFAULT_CONCURRENCY,
 ) -> ParallelBacktestReport:
@@ -131,6 +132,7 @@ async def parallel_backtest(
                 min_tier=min_tier,
                 require_htf_alignment=require_htf_alignment,
                 min_confluence=min_confluence,
+                require_smc_grounding=require_smc_grounding,
             )
             # Pre-load the correlated pair so SMT readings resolve.
             pair = pair_for(probe, symbol)
