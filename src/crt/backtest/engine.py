@@ -40,7 +40,7 @@ from crt.models import (
     Signal,
     Timeframe,
 )
-from crt.paper import PaperConfig, PaperEngine
+from crt.paper import FailureMode, PaperConfig, PaperEngine, classify as classify_failure
 from crt.smc import compute as compute_smc
 from crt.store import CandleStore
 
@@ -55,6 +55,7 @@ class BacktestReport:
     ending_balance: float
     signals: list[Signal]
     positions: list[PaperPosition]
+    failure_breakdown: dict = field(default_factory=dict)
 
     @property
     def total_pnl(self) -> float:
@@ -145,6 +146,22 @@ class BacktestReport:
                 b["losses"] += 1
         return buckets
 
+    def by_failure_mode(
+        self,
+        store: CandleStore,
+        smt,
+    ) -> dict[FailureMode, dict]:
+        """Bucket SL-closed positions by Episode-8 failure mode."""
+        agg: dict[FailureMode, dict] = {}
+        for p in self.positions:
+            if p.status != PositionStatus.CLOSED_SL:
+                continue
+            tag = classify_failure(p, store, smt)
+            b = agg.setdefault(tag.mode, {"trades": 0, "pnl": 0.0})
+            b["trades"] += 1
+            b["pnl"] += p.realized_pnl
+        return agg
+
     def by_subtype(self) -> dict[CRTSubtype, dict]:
         """Win-rate breakdown per CRT subtype."""
         agg: dict[CRTSubtype, dict] = {}
@@ -216,13 +233,23 @@ class BacktestRunner:
     # ----------------------------------------------------------------- report
 
     def report(self) -> BacktestReport:
+        failures: dict = {}
+        positions = list(self.engine.closed_positions) + list(self.engine.open_positions)
+        for p in positions:
+            if p.status != PositionStatus.CLOSED_SL:
+                continue
+            tag = classify_failure(p, self.store, self.smt)
+            b = failures.setdefault(tag.mode, {"trades": 0, "pnl": 0.0})
+            b["trades"] += 1
+            b["pnl"] += p.realized_pnl
         return BacktestReport(
             symbols=list(self.symbols),
             timeframes=list(self.timeframes),
             starting_balance=self.paper_config.starting_balance,
             ending_balance=self.engine.balance,
             signals=list(self.signals),
-            positions=list(self.engine.closed_positions) + list(self.engine.open_positions),
+            positions=positions,
+            failure_breakdown=failures,
         )
 
     # ---------------------------------------------------------------- private
@@ -294,5 +321,13 @@ def format_report(r: BacktestReport) -> str:
                 f"  score {bucket:<6} trades={b['trades']:<3} "
                 f"W={b['wins']:<3} L={b['losses']:<3} "
                 f"WR={wr:5.1f}%  pnl={b['pnl']:+.2f}"
+            )
+    failure = r.failure_breakdown
+    if failure:
+        lines.append("")
+        lines.append("SL failures by mode (Episode 8):")
+        for mode, b in failure.items():
+            lines.append(
+                f"  {mode.value:<20} trades={b['trades']:<3} pnl={b['pnl']:+.2f}"
             )
     return "\n".join(lines)
