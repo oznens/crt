@@ -150,6 +150,31 @@ _INDEX_HTML = """<!doctype html>
     </div>
 
     <div class="panel full">
+      <strong>Heatmap — parallel backtest across the universe</strong>
+      <div style="margin: 6px 0;">
+        <span class="muted">Top N (or specify symbols below):</span>
+        <input id="hm-top" type="number" value="30" style="width:60px" />
+        <span class="muted">TF:</span>
+        <select id="hm-tf">
+          <option>15m</option><option selected>1h</option>
+          <option>4h</option><option>1d</option>
+        </select>
+        <span class="muted">Bars:</span>
+        <input id="hm-bars" type="number" value="500" style="width:80px" />
+        <span class="muted">Concurrency:</span>
+        <input id="hm-conc" type="number" value="6" style="width:60px" />
+        <button onclick="runHeatmap()" id="hm-run">▶ Run heatmap</button>
+        <span id="hm-status" class="muted"></span>
+      </div>
+      <div style="margin: 6px 0;">
+        <span class="muted">Or pin symbols (overrides Top N):</span>
+        <input id="hm-symbols" placeholder="BTC_USDT,ETH_USDT,..." style="width:520px" />
+      </div>
+      <div id="hm-summary" class="muted" style="margin: 6px 0;"></div>
+      <div id="hm-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 4px;"></div>
+    </div>
+
+    <div class="panel full">
       <strong>Backtest</strong>
       <div style="margin: 6px 0;">
         <span class="muted">Symbols (comma-separated):</span>
@@ -231,6 +256,88 @@ async function refreshChart() {
   const fig = await r.json();
   Plotly.react('chart', fig.data, fig.layout, {responsive:true});
 }
+function heatColor(pnl, maxAbs) {
+  // 0 → neutral grey; +max → vivid green; -max → vivid red.
+  if (!maxAbs) return 'rgba(48,54,61,0.85)';
+  const t = Math.max(-1, Math.min(1, pnl / maxAbs));
+  if (t >= 0) {
+    const g = Math.round(86 + (211 - 86) * t);
+    return `rgba(38, ${g}, 100, 0.85)`;
+  } else {
+    const r = Math.round(80 + (248 - 80) * -t);
+    return `rgba(${r}, 80, 80, 0.85)`;
+  }
+}
+async function runHeatmap() {
+  const top = parseInt(document.getElementById('hm-top').value, 10);
+  const tf = document.getElementById('hm-tf').value;
+  const bars = parseInt(document.getElementById('hm-bars').value, 10);
+  const conc = parseInt(document.getElementById('hm-conc').value, 10);
+  const symbolsRaw = document.getElementById('hm-symbols').value.trim();
+  const symbols = symbolsRaw
+    ? symbolsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const btn = document.getElementById('hm-run');
+  const status = document.getElementById('hm-status');
+  const grid = document.getElementById('hm-grid');
+  const summary = document.getElementById('hm-summary');
+  btn.disabled = true;
+  status.textContent = ' · running ...';
+  grid.innerHTML = '';
+  summary.textContent = '';
+  try {
+    const body = {tfs: [tf], bars, concurrency: conc};
+    if (symbols.length) body.symbols = symbols;
+    else body.top = top;
+    const r = await fetch('/api/heatmap', {
+      method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      status.textContent = ' · error: ' + text;
+      return;
+    }
+    const d = await r.json();
+    status.textContent = ` · done.`;
+    summary.innerHTML =
+      `${d.rows.length} symbols · ${d.tfs.join(',')} · ${d.bars} bars · `
+      + `total PnL <span class="${d.total_pnl>=0?'pos':'neg'}">`
+      + `${d.total_pnl>=0?'+':''}${d.total_pnl.toFixed(2)}</span>`
+      + ` · W ${d.wins} · L ${d.losses} · WR ${d.win_rate.toFixed(1)}%`;
+    const maxAbs = Math.max(...d.rows.map(r => Math.abs(r.pnl)), 1);
+    for (const row of d.rows) {
+      const cell = document.createElement('div');
+      cell.style.background = heatColor(row.pnl, maxAbs);
+      cell.style.padding = '6px';
+      cell.style.borderRadius = '4px';
+      cell.style.color = '#fff';
+      cell.style.fontSize = '11px';
+      cell.style.cursor = 'pointer';
+      cell.title = `${row.symbol}\nPnL: ${row.pnl.toFixed(2)}\n`
+        + `W/L: ${row.wins}/${row.losses}\nWR: ${row.win_rate.toFixed(1)}%\n`
+        + `trades: ${row.trades}\nsignals: ${row.signals}\n`
+        + `expectancy: ${row.expectancy.toFixed(2)}`;
+      const sign = row.pnl >= 0 ? '+' : '';
+      cell.innerHTML =
+        `<div style="font-weight:600">${row.symbol}</div>`
+        + `<div style="font-size:13px;font-weight:600">${sign}${row.pnl.toFixed(0)}</div>`
+        + `<div style="opacity:0.8">${row.wins}W ${row.losses}L · ${row.win_rate.toFixed(0)}%</div>`;
+      // Clicking a cell loads it into the chart panel.
+      cell.addEventListener('click', () => {
+        document.getElementById('chart-symbol').value = row.symbol;
+        document.getElementById('chart-tf').value = tf;
+        refreshChart();
+        window.scrollTo({top: document.getElementById('chart').offsetTop, behavior: 'smooth'});
+      });
+      grid.appendChild(cell);
+    }
+  } catch (e) {
+    status.textContent = ' · error: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function runBacktest() {
   const symbols = document.getElementById('bt-symbols').value
     .split(',').map(s => s.trim()).filter(Boolean);
@@ -467,6 +574,57 @@ def create_app(dashboard: WebDashboard) -> FastAPI:
         except ValueError as e:
             raise HTTPException(400, f"unknown tf: {tf}") from e
         return JSONResponse(dashboard.chart_payload(symbol, tf_enum))
+
+    @app.post("/api/heatmap")
+    async def heatmap_endpoint(req: dict):
+        """Parallel backtest across the top-N universe (or an explicit list)
+        and return per-symbol PnL + win rate so the browser can render a
+        heatmap of which symbols are actually edging right now."""
+        from crt.backtest import parallel_backtest
+        from crt.data.bybit import BybitClient
+        from crt.paper import PaperConfig
+
+        symbols = req.get("symbols") or []
+        top = int(req.get("top", 30))
+        tfs = [Timeframe(t) for t in (req.get("tfs") or ["1h"])]
+        bars = int(req.get("bars", 500))
+        risk = float(req.get("risk", 100.0))
+        concurrency = int(req.get("concurrency", 6))
+
+        async with BybitClient() as client:
+            if not symbols:
+                symbols = await client.fetch_top_symbols(limit=top)
+            report = await parallel_backtest(
+                client, symbols, tfs,
+                paper_config=PaperConfig(starting_balance=10_000.0, risk_per_trade=risk),
+                bars=bars, concurrency=concurrency,
+            )
+
+        rows = []
+        for sym, r in report.per_symbol.items():
+            n_dec = r.wins + r.losses
+            rows.append({
+                "symbol": sym,
+                "pnl": r.ending_balance - r.starting_balance,
+                "wins": r.wins,
+                "losses": r.losses,
+                "win_rate": r.win_rate,
+                "trades": len(r.positions),
+                "signals": len(r.signals),
+                "expectancy": r.expectancy,
+                "decisive": n_dec,
+            })
+        rows.sort(key=lambda x: x["pnl"], reverse=True)
+
+        return JSONResponse({
+            "tfs": [t.value for t in tfs],
+            "bars": bars,
+            "total_pnl": report.total_pnl,
+            "wins": report.wins,
+            "losses": report.losses,
+            "win_rate": report.win_rate,
+            "rows": rows,
+        })
 
     @app.post("/api/backtest")
     async def backtest_endpoint(req: dict):

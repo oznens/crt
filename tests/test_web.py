@@ -110,3 +110,13 @@ def test_backtest_endpoint_400_without_symbols(dashboard):
     client = TestClient(create_app(dashboard))
     r = client.post("/api/backtest", json={"tfs": ["1h"]})
     assert r.status_code == 400
+
+
+def test_index_includes_heatmap_panel(dashboard):
+    """The HTML page must expose the heatmap panel + Run button."""
+    client = TestClient(create_app(dashboard))
+    text = client.get("/").text
+    assert "Heatmap" in text
+    assert "runHeatmap" in text
+    assert "hm-symbols" in text
+    assert "heatColor" in text
