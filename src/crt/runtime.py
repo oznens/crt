@@ -66,20 +66,45 @@ class Runtime:
     # ---------------------------------------------------------------- public
 
     async def bootstrap(self, client: BybitClient) -> None:
-        """Fill the ringbuffer with recent history before live stream starts."""
-        async def _one(sym: str, tf: Timeframe) -> None:
+        """Fetch history per (symbol, tf) then REPLAY the candles through
+        the same on_candle() pipeline the live stream uses.
+
+        The replay is critical: it means any CRT setups that printed
+        historically also get marked-to-market against the candles that
+        came after them. Positions that would have been stopped or
+        target-hit historically are closed during bootstrap; only
+        signals whose trade is still in flight at the end of history
+        remain "open" when the WS feed takes over.
+
+        Without this replay the live stream would emit a flood of stale
+        signals against the historical buffer the moment it connected,
+        opening positions at prices the market left behind hours ago.
+        """
+        all_candles: list[Candle] = []
+        async def _fetch(sym: str, tf: Timeframe) -> None:
             try:
                 kl = await client.fetch_klines(sym, tf, limit=BOOTSTRAP_CANDLES)
+                all_candles.extend(kl)
             except Exception:
                 log.exception("bootstrap failed for %s %s", sym, tf.value)
-                return
-            for c in kl:
-                self.store.append(c)
-        tasks = [_one(s, tf) for s in self.symbols for tf in self.timeframes]
+
+        tasks = [_fetch(s, tf) for s in self.symbols for tf in self.timeframes]
         # Stagger to avoid hammering REST rate limit.
         for i in range(0, len(tasks), 10):
             await asyncio.gather(*tasks[i:i + 10], return_exceptions=True)
-        log.info("bootstrap complete: %d symbols × %d tfs", len(self.symbols), len(self.timeframes))
+
+        # Replay chronologically across all symbols and TFs.
+        all_candles.sort(key=lambda c: (c.open_time, c.tf.seconds))
+        log.info("bootstrap replay: %d candles across %d symbols × %d tfs",
+                 len(all_candles), len(self.symbols), len(self.timeframes))
+        for c in all_candles:
+            self.on_candle(c)
+        log.info(
+            "bootstrap complete: %d open, %d closed positions, %d signals",
+            len(self.engine.open_positions),
+            len(self.engine.closed_positions),
+            sum(1 for _ in self.dashboard.recent_signals),
+        )
 
     def on_candle(self, candle: Candle) -> None:
         self.store.append(candle)
@@ -111,10 +136,16 @@ class Runtime:
         for sig in raw:
             if not self._accept_signal(sig, snap):
                 continue
+            # Pass the current candle so the paper engine only opens
+            # positions whose entry was actually reachable on the
+            # candle that triggered the signal — prevents the "ghost
+            # open position at stale historical price" bug.
+            pos = self.engine.on_signal(sig, fill_candle=candle)
+            if pos is None:
+                continue
             self.dashboard.push_signal(sig)
             if self.web_dashboard is not None:
                 self.web_dashboard.push_signal(sig)
-            self.engine.on_signal(sig)
 
     def _check_kod_for_open_positions(self, symbol: str, tf: Timeframe) -> None:
         for pos in self.engine.open_positions:

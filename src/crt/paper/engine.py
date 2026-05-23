@@ -40,8 +40,20 @@ class PaperEngine:
 
     # ------------------------------------------------------------------ public
 
-    def on_signal(self, signal: Signal) -> PaperPosition | None:
-        # Avoid double-entering the same range candle setup.
+    def on_signal(
+        self,
+        signal: Signal,
+        fill_candle: Candle | None = None,
+    ) -> PaperPosition | None:
+        """Open a paper position from a confirmed signal.
+
+        `fill_candle` is the candle that emitted the signal — its
+        open_time becomes the position's `opened_at` so backtest/replay
+        positions get historically-correct timestamps (otherwise we'd
+        stamp every position with "now"). The full pending-order /
+        limit-fill model is a follow-up; right now we still open
+        optimistically at the computed entry.
+        """
         if any(p.signal is signal for p in self.open_positions):
             return None
         entry, stop = self._entry_and_stop(signal)
@@ -56,7 +68,7 @@ class PaperEngine:
             stop_loss=stop,
             take_profits=tps,
             size=size,
-            opened_at=utc_now(),
+            opened_at=utc_now() if fill_candle is None else fill_candle.open_time,
         )
         self.open_positions.append(pos)
         log.info(

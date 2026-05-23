@@ -277,8 +277,10 @@ class BacktestRunner:
         for sig in raw:
             if not self._accept_signal(sig, snap):
                 continue
+            pos = self.engine.on_signal(sig, fill_candle=candle)
+            if pos is None:
+                continue
             self.signals.append(sig)
-            self.engine.on_signal(sig)
 
     def _check_kod_open_positions(self, symbol: str, tf: Timeframe) -> None:
         for pos in self.engine.open_positions:
