@@ -82,6 +82,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Max concurrent REST fetches when --parallel (default 8)",
     )
 
+    p_web = sub.add_parser(
+        "web",
+        help="Start the FastAPI live dashboard on the chosen port",
+    )
+    _shared_universe_args(p_web)
+    p_web.add_argument("--host", default="127.0.0.1")
+    p_web.add_argument("--port", type=int, default=8000)
+
     p_chart = sub.add_parser(
         "chart",
         help="Render a candle chart with SMC + CRT overlays to an HTML file",
@@ -186,6 +194,49 @@ async def _run_backtest(args: argparse.Namespace) -> int:
     async with BybitClient() as client:
         await runner.load_from_exchange(client, limit_per_tf=args.bars)
     print(format_report(runner.report()))
+    return 0
+
+
+async def _run_web(args: argparse.Namespace) -> int:
+    """Spin up the FastAPI dashboard + headless scanner side-by-side."""
+    import uvicorn
+    from crt.web import WebDashboard, create_app
+
+    symbols = await _resolve_symbols(args)
+    timeframes = [Timeframe(t) for t in args.tf]
+    logging.info("Web dashboard: %d symbols × %d tfs on http://%s:%d",
+                 len(symbols), len(timeframes), args.host, args.port)
+
+    engine = PaperEngine(PaperConfig(starting_balance=args.balance,
+                                     risk_per_trade=args.risk))
+    runtime = Runtime(
+        symbols=symbols, timeframes=timeframes, engine=engine,
+        min_tier=Tier(args.min_tier),
+        require_htf_alignment=args.strict_htf,
+        min_confluence=args.min_confluence,
+    )
+    web_dash = WebDashboard(
+        runtime.store, runtime.engine,
+        watch=[(s, t) for s in symbols for t in timeframes],
+    )
+    runtime.web_dashboard = web_dash
+
+    app = create_app(web_dash)
+    config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
+    server = uvicorn.Server(config)
+
+    scanner_task = asyncio.create_task(runtime.run_headless())
+    server_task = asyncio.create_task(server.serve())
+    try:
+        done, pending = await asyncio.wait(
+            [scanner_task, server_task], return_when=asyncio.FIRST_EXCEPTION,
+        )
+        for t in pending:
+            t.cancel()
+        for t in done:
+            t.result()  # surface any exception
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
     return 0
 
 
@@ -296,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.watch > 0:
                 return asyncio.run(_run_chart_watch(args))
             return asyncio.run(_run_chart_once(args))
+        if args.cmd == "web":
+            return asyncio.run(_run_web(args))
         return asyncio.run(_run_scan(args))
     except KeyboardInterrupt:
         return 0

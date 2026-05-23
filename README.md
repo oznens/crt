@@ -60,6 +60,10 @@ crt chart BTC_USDT --tf 1h --bars 500 --out chart.html
 
 # Same, but re-render every 60s so the browser auto-reloads via meta-refresh
 crt chart BTC_USDT --tf 15m --watch 60
+
+# Web dashboard: FastAPI + live Plotly chart + signal/position panels at
+# http://127.0.0.1:8000 . Scans the universe in the background while serving.
+crt web --top 20 --tf 15m 1h
 ```
 
 ## SMC integration

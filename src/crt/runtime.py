@@ -44,6 +44,7 @@ class Runtime:
         min_tier: Tier = Tier.MEDIUM,
         require_htf_alignment: bool = False,
         min_confluence: float = float("-inf"),
+        web_dashboard=None,
     ):
         self.symbols = symbols
         self.timeframes = timeframes
@@ -59,6 +60,8 @@ class Runtime:
             self.engine,
             watch=[(s, t) for s in symbols for t in timeframes],
         )
+        # Optional web dashboard mirrors the same signals + positions feed.
+        self.web_dashboard = web_dashboard
 
     # ---------------------------------------------------------------- public
 
@@ -109,6 +112,8 @@ class Runtime:
             if not self._accept_signal(sig, snap):
                 continue
             self.dashboard.push_signal(sig)
+            if self.web_dashboard is not None:
+                self.web_dashboard.push_signal(sig)
             self.engine.on_signal(sig)
 
     def _check_kod_for_open_positions(self, symbol: str, tf: Timeframe) -> None:
@@ -169,6 +174,20 @@ class Runtime:
             finally:
                 consumer.cancel()
                 await asyncio.gather(consumer, return_exceptions=True)
+
+    async def run_headless(self) -> None:
+        """Run the data → detector → paper pipeline without the Rich TUI.
+
+        Intended to be paired with the web dashboard so the FastAPI app
+        can scrape live state from the same store / engine without the
+        terminal taking over stdout.
+        """
+        async with BybitClient() as client:
+            await self.bootstrap(client)
+        pairs = [(s, tf) for s in self.symbols for tf in self.timeframes]
+        async with BybitWsStream(pairs) as stream:
+            async for candle in stream:
+                self.on_candle(candle)
 
     # --------------------------------------------------------------- private
 
