@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import logging
 
+from crt.context import Tier
 from crt.data.mexc import MexcClient
 from crt.models import Timeframe
 from crt.paper import PaperConfig, PaperEngine
@@ -32,6 +33,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--quote", default="USDT", help="Quote asset filter for --top")
     p.add_argument("--balance", type=float, default=10_000.0)
     p.add_argument("--risk", type=float, default=100.0, help="USD risked per trade")
+    p.add_argument(
+        "--min-tier", choices=[t.value for t in Tier], default=Tier.MEDIUM.value,
+        help="Reject candles below this time-window tier (default: medium)",
+    )
+    p.add_argument(
+        "--strict-htf", action="store_true",
+        help="Require parent HTF candle bias to agree with signal direction",
+    )
     p.add_argument("--log", default="INFO")
     return p.parse_args(argv)
 
@@ -50,7 +59,11 @@ async def _async_main(args: argparse.Namespace) -> int:
                  ("..." if len(symbols) > 8 else ""))
     timeframes = [Timeframe(t) for t in args.tf]
     engine = PaperEngine(PaperConfig(starting_balance=args.balance, risk_per_trade=args.risk))
-    runtime = Runtime(symbols=symbols, timeframes=timeframes, engine=engine)
+    runtime = Runtime(
+        symbols=symbols, timeframes=timeframes, engine=engine,
+        min_tier=Tier(args.min_tier),
+        require_htf_alignment=args.strict_htf,
+    )
     try:
         await runtime.run()
     except KeyboardInterrupt:
