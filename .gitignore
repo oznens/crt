@@ -13,9 +13,9 @@ dist/
 *.log
 .DS_Store
 
-# local data caches
-data/
-cache/
+# local data caches — only at repo root, NOT the src/crt/data package
+/data/
+/cache/
 *.parquet
 *.csv
 !docs/**/*.csv
