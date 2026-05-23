@@ -9,7 +9,12 @@ import sys
 
 from pathlib import Path
 
-from crt.backtest.engine import BacktestRunner, format_report
+from crt.backtest import (
+    BacktestRunner,
+    format_parallel_report,
+    format_report,
+    parallel_backtest,
+)
 from crt.chart import write_chart_html
 from crt.context import SMTMonitor, Tier, score_signal
 from crt.data.mexc import MexcClient
@@ -67,6 +72,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p_bt.add_argument(
         "--bars", type=int, default=500,
         help="Closed candles per (symbol, tf) to pull from REST (default 500)",
+    )
+    p_bt.add_argument(
+        "--parallel", action="store_true",
+        help="Run one mini-runner per symbol concurrently (top-50 friendly)",
+    )
+    p_bt.add_argument(
+        "--concurrency", type=int, default=8,
+        help="Max concurrent REST fetches when --parallel (default 8)",
     )
 
     p_chart = sub.add_parser(
@@ -145,11 +158,27 @@ async def _run_scan(args: argparse.Namespace) -> int:
 async def _run_backtest(args: argparse.Namespace) -> int:
     symbols = await _resolve_symbols(args)
     timeframes = [Timeframe(t) for t in args.tf]
-    logging.info("Backtesting %d symbols × %d tfs × %d bars",
-                 len(symbols), len(timeframes), args.bars)
+    logging.info("Backtesting %d symbols × %d tfs × %d bars (parallel=%s)",
+                 len(symbols), len(timeframes), args.bars, args.parallel)
+    paper_cfg = PaperConfig(starting_balance=args.balance, risk_per_trade=args.risk)
+
+    if args.parallel:
+        async with MexcClient() as client:
+            report = await parallel_backtest(
+                client, symbols, timeframes,
+                paper_config=paper_cfg,
+                min_tier=Tier(args.min_tier),
+                require_htf_alignment=args.strict_htf,
+                min_confluence=args.min_confluence,
+                bars=args.bars,
+                concurrency=args.concurrency,
+            )
+        print(format_parallel_report(report))
+        return 0
+
     runner = BacktestRunner(
         symbols=symbols, timeframes=timeframes,
-        paper_config=PaperConfig(starting_balance=args.balance, risk_per_trade=args.risk),
+        paper_config=paper_cfg,
         min_tier=Tier(args.min_tier),
         require_htf_alignment=args.strict_htf,
         min_confluence=args.min_confluence,
