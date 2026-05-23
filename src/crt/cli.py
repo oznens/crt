@@ -11,12 +11,13 @@ from pathlib import Path
 
 from crt.backtest.engine import BacktestRunner, format_report
 from crt.chart import write_chart_html
-from crt.context import Tier
+from crt.context import SMTMonitor, Tier, score_signal
 from crt.data.mexc import MexcClient
-from crt.detector import CRTDetector
-from crt.models import Timeframe
+from crt.detector import CRTDetector, detect_kod, detect_model1, model1_to_signal
+from crt.models import Direction, Timeframe
 from crt.paper import PaperConfig, PaperEngine
 from crt.runtime import Runtime
+from crt.smc import compute as compute_smc
 from crt.store import CandleStore
 
 DEFAULT_TFS = [Timeframe.M15, Timeframe.H1, Timeframe.H4]
@@ -152,13 +153,52 @@ async def _run_chart_once(args: argparse.Namespace) -> int:
     out = Path(args.out)
     async with MexcClient() as client:
         candles = await client.fetch_klines(args.symbol, tf, limit=args.bars)
+        # Pair candles for SMT divergence overlay.
+        smt_monitor = SMTMonitor(CandleStore())
+        pair = smt_monitor.pair_for(args.symbol)
+        pair_candles: list = []
+        if pair is not None:
+            try:
+                pair_candles = await client.fetch_klines(pair, tf, limit=args.bars)
+            except Exception:
+                pair_candles = []
     store = CandleStore()
     for c in candles:
         store.append(c)
-    signals = CRTDetector(store).evaluate(args.symbol, tf)
+    for c in pair_candles:
+        store.append(c)
+
+    # CRT subtype signals + Model #1 signals, both scored by confluence.
+    signals = list(CRTDetector(store).evaluate(args.symbol, tf))
+    for m1 in detect_model1(candles):
+        signals.append(model1_to_signal(m1))
+    snap = compute_smc(candles)
+    smt = SMTMonitor(store)
+    for sig in signals:
+        score = score_signal(sig, store, snap, smt)
+        sig.confluence_score = score.total
+        sig.confluence_breakdown = dict(score.components)
+
+    # KOD spikes for any signals we just emitted, against later candles.
+    kods = []
+    for sig in signals:
+        after = [c for c in candles if c.open_time > sig.detected_at]
+        k = detect_kod(sig, after)
+        if k is not None:
+            kods.append(k)
+
+    # SMT reading on the asset's dominant direction over the window.
+    smt_reading = None
+    if pair_candles:
+        # Use the last signal's direction; or default to bearish if none.
+        direction = signals[-1].direction if signals else Direction.BEARISH
+        smt_reading = smt.reading(args.symbol, tf, direction)
+
     write_chart_html(
         candles, signals, out,
-        title=f"{args.symbol} {tf.value}  ·  {len(candles)} bars  ·  {len(signals)} signals",
+        kods=kods, smt_reading=smt_reading,
+        title=f"{args.symbol} {tf.value}  ·  {len(candles)} bars  "
+              f"·  {len(signals)} signals  ·  {len(kods)} KOD",
         refresh_seconds=args.refresh,
     )
     abs_path = out.resolve()

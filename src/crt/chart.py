@@ -14,6 +14,8 @@ from typing import Sequence
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from crt.context.smt import SMTReading, SMTState
+from crt.detector.kod import KODSignal
 from crt.models import Candle, Direction, Signal
 from crt.smc import SMCSnapshot, compute
 
@@ -97,37 +99,66 @@ def _annotations_for_bos(snap: SMCSnapshot, df_index) -> list[dict]:
     return out
 
 
+def _signal_label(sig: Signal) -> str:
+    """Hover text combining subtype, confidence and confluence breakdown."""
+    parts = [
+        f"{sig.subtype.value}",
+        f"conf {sig.confidence:.2f}",
+        f"confluence {sig.confluence_score:+.1f}",
+    ]
+    if sig.confluence_breakdown:
+        breakdown = ", ".join(
+            f"{k}:{v:+.1f}" for k, v in sig.confluence_breakdown.items()
+        )
+        parts.append(breakdown)
+    return " · ".join(parts)
+
+
 def _scatter_for_signals(signals: Sequence[Signal]) -> list[go.Scatter]:
-    bull_x: list = [s.detected_at for s in signals if s.direction is Direction.BULLISH]
-    bull_y: list = [s.range_low for s in signals if s.direction is Direction.BULLISH]
-    bull_text: list = [
-        f"{s.subtype.value} (conf {s.confidence:.2f})"
-        for s in signals if s.direction is Direction.BULLISH
-    ]
-    bear_x = [s.detected_at for s in signals if s.direction is Direction.BEARISH]
-    bear_y = [s.range_high for s in signals if s.direction is Direction.BEARISH]
-    bear_text = [
-        f"{s.subtype.value} (conf {s.confidence:.2f})"
-        for s in signals if s.direction is Direction.BEARISH
-    ]
+    """Split signals into CRT-style and Model #1 traces with distinct markers."""
     out: list[go.Scatter] = []
-    if bull_x:
+
+    def _grouped(direction: Direction, *, is_model1: bool):
+        sigs = [
+            s for s in signals
+            if s.direction is direction
+            and (s.subtype.value == "model_1_single_trigger") == is_model1
+        ]
+        return sigs
+
+    # CRT-classic markers: solid triangles
+    for direction, color, dark, symbol, name in (
+        (Direction.BULLISH, "lime", "darkgreen", "triangle-up", "Bullish CRT"),
+        (Direction.BEARISH, "red", "darkred", "triangle-down", "Bearish CRT"),
+    ):
+        sigs = _grouped(direction, is_model1=False)
+        if not sigs:
+            continue
+        y_attr = "range_low" if direction is Direction.BULLISH else "range_high"
         out.append(go.Scatter(
-            x=bull_x, y=bull_y, mode="markers+text", name="Bullish CRT",
-            marker=dict(symbol="triangle-up", size=14, color="lime",
-                        line=dict(color="darkgreen", width=1)),
-            text=["▲"] * len(bull_x),
-            textposition="bottom center",
-            hovertext=bull_text, hoverinfo="text",
+            x=[s.detected_at for s in sigs],
+            y=[getattr(s, y_attr) for s in sigs],
+            mode="markers", name=name,
+            marker=dict(symbol=symbol, size=14, color=color,
+                        line=dict(color=dark, width=1)),
+            hovertext=[_signal_label(s) for s in sigs], hoverinfo="text",
         ))
-    if bear_x:
+
+    # Model #1 markers: star symbol so they stand out from CRT triangles
+    for direction, color, dark, name in (
+        (Direction.BULLISH, "#80deea", "#006064", "Bullish Model #1"),
+        (Direction.BEARISH, "#ff8a65", "#bf360c", "Bearish Model #1"),
+    ):
+        sigs = _grouped(direction, is_model1=True)
+        if not sigs:
+            continue
         out.append(go.Scatter(
-            x=bear_x, y=bear_y, mode="markers+text", name="Bearish CRT",
-            marker=dict(symbol="triangle-down", size=14, color="red",
-                        line=dict(color="darkred", width=1)),
-            text=["▼"] * len(bear_x),
-            textposition="top center",
-            hovertext=bear_text, hoverinfo="text",
+            x=[s.detected_at for s in sigs],
+            y=[s.entry_override or s.lhf for s in sigs],
+            mode="markers", name=name,
+            marker=dict(symbol="star", size=15, color=color,
+                        line=dict(color=dark, width=1)),
+            hovertext=[_signal_label(s) for s in sigs], hoverinfo="text",
         ))
     return out
 
@@ -135,6 +166,8 @@ def _scatter_for_signals(signals: Sequence[Signal]) -> list[go.Scatter]:
 def render_chart(
     candles: Sequence[Candle],
     signals: Sequence[Signal] = (),
+    kods: Sequence[KODSignal] = (),
+    smt_reading: SMTReading | None = None,
     *,
     title: str = "",
     swing_length: int = 10,
@@ -201,14 +234,81 @@ def render_chart(
     for trace in _scatter_for_signals(signals):
         fig.add_trace(trace)
 
+    # KOD spike markers: golden diamond on the spike candle
+    if kods:
+        bull_kods = [k for k in kods if k.direction is Direction.BULLISH]
+        bear_kods = [k for k in kods if k.direction is Direction.BEARISH]
+        if bull_kods:
+            fig.add_trace(go.Scatter(
+                x=[k.kod_candle.open_time for k in bull_kods],
+                y=[k.kod_candle.low for k in bull_kods],
+                mode="markers", name="Bullish KOD",
+                marker=dict(symbol="diamond", size=12, color="gold",
+                            line=dict(color="darkgoldenrod", width=1)),
+                hovertext=[f"KOD spike @ {k.spike_price:.6f}" for k in bull_kods],
+                hoverinfo="text",
+            ))
+        if bear_kods:
+            fig.add_trace(go.Scatter(
+                x=[k.kod_candle.open_time for k in bear_kods],
+                y=[k.kod_candle.high for k in bear_kods],
+                mode="markers", name="Bearish KOD",
+                marker=dict(symbol="diamond", size=12, color="gold",
+                            line=dict(color="darkgoldenrod", width=1)),
+                hovertext=[f"KOD spike @ {k.spike_price:.6f}" for k in bear_kods],
+                hoverinfo="text",
+            ))
+
+    # Per-signal annotations: confluence score floats above each marker
+    extra_annotations: list[dict] = []
+    extra_shapes: list[dict] = []
+    for s in signals:
+        is_model1 = s.subtype.value == "model_1_single_trigger"
+        if s.confluence_score:
+            color = ("#26a69a" if s.confluence_score >= 5
+                     else "#ffb74d" if s.confluence_score >= 1
+                     else "#ef5350")
+            y_anchor = (s.range_high if s.direction is Direction.BEARISH
+                        else s.range_low)
+            offset = 1.02 if s.direction is Direction.BEARISH else 0.98
+            extra_annotations.append(dict(
+                x=s.detected_at, y=y_anchor * offset, xref="x", yref="y",
+                text=f"<b>{s.confluence_score:+.0f}</b>",
+                showarrow=False,
+                font=dict(size=11, color=color),
+                bgcolor="rgba(0,0,0,0.55)",
+                bordercolor=color, borderwidth=1, borderpad=2,
+            ))
+        # Model #1: draw a small box around the trigger candle's body so
+        # the operator can spot the thick candle context at a glance.
+        if is_model1 and s.entry_override is not None and s.stop_override is not None:
+            color = ("rgba(38, 198, 218, 0.45)" if s.direction is Direction.BULLISH
+                     else "rgba(255, 140, 0, 0.45)")
+            extra_shapes.append(dict(
+                type="line", xref="x", yref="y",
+                x0=s.detected_at, x1=s.detected_at,
+                y0=s.stop_override, y1=s.entry_override,
+                line=dict(color=color, width=3),
+            ))
+
+    full_title = title or "CRT scan"
+    if smt_reading is not None and smt_reading.is_divergent:
+        flag = "🐂" if smt_reading.state is SMTState.BULLISH else "🐻"
+        full_title += (
+            f"   ·   {flag} SMT vs {smt_reading.pair_symbol}: "
+            f"{smt_reading.state.value}"
+        )
+
     fig.update_layout(
-        title=title or "CRT scan",
+        title=full_title,
         xaxis_rangeslider_visible=False,
         template="plotly_dark",
         height=720,
         margin=dict(l=40, r=40, t=60, b=40),
-        shapes=_shapes_for_fvgs(snap, df.index) + _shapes_for_order_blocks(snap, df.index),
-        annotations=_annotations_for_bos(snap, df.index),
+        shapes=(_shapes_for_fvgs(snap, df.index)
+                + _shapes_for_order_blocks(snap, df.index)
+                + extra_shapes),
+        annotations=_annotations_for_bos(snap, df.index) + extra_annotations,
         legend=dict(orientation="h", y=1.05),
     )
     return fig
@@ -218,13 +318,15 @@ def write_chart_html(
     candles: Sequence[Candle],
     signals: Sequence[Signal],
     out_path: Path,
+    kods: Sequence[KODSignal] = (),
+    smt_reading: SMTReading | None = None,
     *,
     title: str = "",
     refresh_seconds: int = 0,
 ) -> Path:
     """Render a chart to HTML on disk. If `refresh_seconds` > 0, the page
     auto-reloads at that interval so the same URL stays live."""
-    fig = render_chart(candles, signals, title=title)
+    fig = render_chart(candles, signals, kods=kods, smt_reading=smt_reading, title=title)
     html = fig.to_html(full_html=True, include_plotlyjs="cdn")
     if refresh_seconds > 0:
         meta = f'<meta http-equiv="refresh" content="{refresh_seconds}">'

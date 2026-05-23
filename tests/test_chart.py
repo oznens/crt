@@ -65,3 +65,58 @@ def test_write_chart_html_no_refresh_when_zero(tmp_path):
     write_chart_html(_candles(), [], out, refresh_seconds=0)
     text = out.read_text()
     assert 'http-equiv="refresh"' not in text
+
+
+def test_render_chart_distinguishes_model1_from_crt_signals():
+    from crt.models import CRTSubtype
+    candles = _candles()
+    crt_sig = Signal(
+        symbol="BTC_USDT", tf=Timeframe.H1, subtype=CRTSubtype.CLASSIC_3,
+        direction=Direction.BULLISH, detected_at=candles[-3].open_time,
+        range_high=candles[-5].high, range_low=candles[-5].low,
+        purge_price=candles[-4].low, confidence=0.8,
+        lhf=(candles[-5].high + candles[-5].low) / 2,
+        initial_dol=candles[-5].high,
+    )
+    m1_sig = Signal(
+        symbol="BTC_USDT", tf=Timeframe.H1, subtype=CRTSubtype.MODEL_1,
+        direction=Direction.BULLISH, detected_at=candles[-2].open_time,
+        range_high=candles[-3].high, range_low=candles[-3].low,
+        purge_price=candles[-4].low, confidence=0.7,
+        lhf=(candles[-3].high + candles[-3].low) / 2,
+        initial_dol=candles[-3].high,
+        entry_override=candles[-2].close, stop_override=candles[-3].low,
+    )
+    fig = render_chart(candles, [crt_sig, m1_sig])
+    names = [getattr(t, "name", "") for t in fig.data]
+    assert any("Bullish CRT" in n for n in names)
+    assert any("Bullish Model #1" in n for n in names)
+
+
+def test_render_chart_marks_kod_spikes():
+    from crt.context.smt import SMTReading, SMTState
+    from crt.detector.kod import KODSignal
+    from crt.models import CRTSubtype
+    candles = _candles()
+    parent = Signal(
+        symbol="BTC_USDT", tf=Timeframe.H1, subtype=CRTSubtype.CLASSIC_3,
+        direction=Direction.BEARISH, detected_at=candles[-6].open_time,
+        range_high=candles[-7].high, range_low=candles[-7].low,
+        purge_price=candles[-6].high, confidence=0.8,
+        lhf=(candles[-7].high + candles[-7].low) / 2,
+        initial_dol=candles[-7].low,
+    )
+    kod = KODSignal(
+        parent_signal=parent, direction=Direction.BEARISH,
+        kod_candle=candles[-3], confirm_candle=candles[-2],
+        spike_price=candles[-3].high, detected_at=candles[-2].open_time,
+    )
+    reading = SMTReading(
+        state=SMTState.BEARISH, lead_symbol="BTC_USDT", pair_symbol="ETH_USDT",
+        lead_extreme=100.0, pair_extreme=50.0, lookback=20,
+    )
+    fig = render_chart(candles, [], kods=[kod], smt_reading=reading)
+    names = [getattr(t, "name", "") for t in fig.data]
+    assert any("KOD" in n for n in names)
+    # Title should mention SMT divergence
+    assert "SMT" in fig.layout.title.text
