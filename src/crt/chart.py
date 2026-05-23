@@ -168,28 +168,37 @@ def _trade_plan_shapes_and_annotations(
     plan: TradePlan,
     sig: Signal,
     df_index,
+    *,
+    ghost: bool = False,
+    x1=None,
 ) -> tuple[list[dict], list[dict]]:
     """Render a TradePlan as TradingView-style RISK / REWARD boxes plus
-    R-multiple labels along the right edge."""
+    R-multiple labels along the right edge.
+
+    `ghost=True` dims everything for *past* plans so the active plan
+    still pops while history stays visible.
+    """
     shapes: list[dict] = []
     annotations: list[dict] = []
     if len(df_index) == 0:
         return shapes, annotations
     x0 = sig.detected_at
-    x1 = df_index[-1]
+    if x1 is None:
+        x1 = df_index[-1]
     bull = plan.direction is Direction.BULLISH
 
-    # RISK box: from entry to stop (red translucent)
+    alpha_mult = 0.35 if ghost else 1.0
+
     risk_top = max(plan.entry, plan.stop)
     risk_bot = min(plan.entry, plan.stop)
     shapes.append(dict(
         type="rect", xref="x", yref="y",
         x0=x0, x1=x1, y0=risk_bot, y1=risk_top,
-        line=dict(color="rgba(239, 83, 80, 0.7)", width=1),
-        fillcolor="rgba(239, 83, 80, 0.15)", layer="below",
+        line=dict(color=f"rgba(239, 83, 80, {0.7 * alpha_mult})",
+                  width=1, dash="dash" if ghost else "solid"),
+        fillcolor=f"rgba(239, 83, 80, {0.15 * alpha_mult})", layer="below",
     ))
 
-    # REWARD box: from entry to the FURTHEST target (green translucent)
     if plan.targets:
         far_tp = plan.targets[-1]
         rew_top = max(plan.entry, far_tp)
@@ -197,42 +206,45 @@ def _trade_plan_shapes_and_annotations(
         shapes.append(dict(
             type="rect", xref="x", yref="y",
             x0=x0, x1=x1, y0=rew_bot, y1=rew_top,
-            line=dict(color="rgba(38, 198, 218, 0.7)", width=1),
-            fillcolor="rgba(76, 175, 80, 0.13)", layer="below",
+            line=dict(color=f"rgba(38, 198, 218, {0.7 * alpha_mult})",
+                      width=1, dash="dash" if ghost else "solid"),
+            fillcolor=f"rgba(76, 175, 80, {0.13 * alpha_mult})", layer="below",
         ))
 
-    # R-multiple gridlines + labels for each TP
-    for tp, r in zip(plan.targets, plan.r_multiples):
-        signed_r = r if bull else r  # always positive
-        shapes.append(dict(
-            type="line", xref="x", yref="y",
-            x0=x0, x1=x1, y0=tp, y1=tp,
-            line=dict(color="rgba(255, 255, 255, 0.18)", width=1, dash="dot"),
-        ))
-        annotations.append(dict(
-            x=x1, y=tp, xref="x", yref="y",
-            text=f"<b>{signed_r:.2f}R</b>",
-            showarrow=False, xanchor="right", yanchor="middle",
-            font=dict(size=10, color="#fff"),
-            bgcolor="rgba(38, 198, 218, 0.55)",
-            bordercolor="rgba(38, 198, 218, 0.9)", borderpad=2,
-        ))
+    # R-multiple gridlines + labels — only on the active plan to keep the
+    # right gutter readable when many plans stack up.
+    if not ghost:
+        for tp, r in zip(plan.targets, plan.r_multiples):
+            shapes.append(dict(
+                type="line", xref="x", yref="y",
+                x0=x0, x1=x1, y0=tp, y1=tp,
+                line=dict(color="rgba(255, 255, 255, 0.18)", width=1, dash="dot"),
+            ))
+            annotations.append(dict(
+                x=x1, y=tp, xref="x", yref="y",
+                text=f"<b>{r:.2f}R</b>",
+                showarrow=False, xanchor="right", yanchor="middle",
+                font=dict(size=10, color="#fff"),
+                bgcolor="rgba(38, 198, 218, 0.55)",
+                bordercolor="rgba(38, 198, 218, 0.9)", borderpad=2,
+            ))
 
-    # SHORT PLAN / LONG PLAN header
     plan_label = "SHORT PLAN" if not bull else "LONG PLAN"
+    status = "ACTIVE" if not ghost else "CLOSED"
     header_y = risk_top if not bull else risk_bot
-    tp_summary = " | ".join(
-        f"TP{i + 1} {r:.2f}R" for i, r in enumerate(plan.r_multiples)
-    )
-    annotations.append(dict(
-        x=x0, y=header_y, xref="x", yref="y",
-        text=f"<b>{plan_label} | ACTIVE</b><br>{tp_summary}",
-        showarrow=False, xanchor="left",
-        yanchor="bottom" if not bull else "top",
-        font=dict(size=11, color="#fff"),
-        bgcolor="rgba(0, 0, 0, 0.65)",
-        bordercolor="rgba(255, 255, 255, 0.25)", borderpad=4,
-    ))
+    if not ghost:
+        tp_summary = " | ".join(
+            f"TP{i + 1} {r:.2f}R" for i, r in enumerate(plan.r_multiples)
+        )
+        annotations.append(dict(
+            x=x0, y=header_y, xref="x", yref="y",
+            text=f"<b>{plan_label} | {status}</b><br>{tp_summary}",
+            showarrow=False, xanchor="left",
+            yanchor="bottom" if not bull else "top",
+            font=dict(size=11, color="#fff"),
+            bgcolor="rgba(0, 0, 0, 0.65)",
+            bordercolor="rgba(255, 255, 255, 0.25)", borderpad=4,
+        ))
     return shapes, annotations
 
 
@@ -464,10 +476,21 @@ def render_chart(
                 line=dict(color=color, width=3),
             ))
 
-    # Trade plans (risk/reward boxes + R-multiple labels)
-    for plan_sig, plan in trade_plans:
+    # Trade plans (risk/reward boxes + R-multiple labels). The LAST plan
+    # in the list is treated as ACTIVE; earlier plans render as ghosts so
+    # the operator can still see past structure on the chart.
+    plan_list = list(trade_plans)
+    for i, (plan_sig, plan) in enumerate(plan_list):
+        is_active = (i == len(plan_list) - 1)
+        # Ghost plans only extend up to the *next* plan's detected_at so
+        # the chart doesn't get smothered in stacked boxes.
+        if is_active:
+            ghost_x1 = None
+        else:
+            next_sig = plan_list[i + 1][0]
+            ghost_x1 = next_sig.detected_at
         plan_shapes, plan_annotations = _trade_plan_shapes_and_annotations(
-            plan, plan_sig, df.index,
+            plan, plan_sig, df.index, ghost=not is_active, x1=ghost_x1,
         )
         extra_shapes.extend(plan_shapes)
         extra_annotations.extend(plan_annotations)

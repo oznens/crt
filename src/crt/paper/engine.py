@@ -97,14 +97,8 @@ class PaperEngine:
         return entry, stop
 
     def _take_profits(self, sig: Signal) -> list[float]:
-        tps = [sig.lhf, sig.initial_dol]
-        if sig.extended_dol is not None:
-            tps.append(sig.extended_dol)
-        else:
-            # synthetic extension = same distance as initial DOL beyond it
-            ext = sig.initial_dol + (sig.initial_dol - sig.lhf)
-            tps.append(ext)
-        return tps
+        # CRT doctrine: exactly two targets — LHF (50%) and Initial DOL.
+        return [sig.lhf, sig.initial_dol]
 
     def _mark_to_market(self, pos: PaperPosition, c: Candle) -> None:
         # Stop hit?
@@ -114,7 +108,8 @@ class PaperEngine:
         if pos.side is Direction.BEARISH and c.high >= pos.stop_loss:
             self._close(pos, pos.stop_loss, PositionStatus.CLOSED_SL, c)
             return
-        # TP ladder: close 1/n of size at each TP. For MVP we just close fully on TP2.
+        # TP ladder. CRT doctrine: when TP1 (LHF) is touched, move the
+        # stop to break-even so the remainder runs risk-free toward TP2.
         tp1, tp2 = pos.take_profits[0], pos.take_profits[1]
         if pos.side is Direction.BULLISH:
             if c.high >= tp2 and pos.status != PositionStatus.CLOSED_TP:
@@ -122,14 +117,26 @@ class PaperEngine:
                 return
             if c.high >= tp1 and pos.status == PositionStatus.OPEN:
                 pos.status = PositionStatus.TP1
-                pos.notes.append(f"TP1 hit @ {tp1:.6f}")
+                old_stop = pos.stop_loss
+                if pos.stop_loss < pos.entry_price:
+                    pos.stop_loss = pos.entry_price  # break-even
+                pos.notes.append(
+                    f"TP1 hit @ {tp1:.6f} — stop {old_stop:.6f} → "
+                    f"{pos.stop_loss:.6f} (break-even)"
+                )
         else:
             if c.low <= tp2 and pos.status != PositionStatus.CLOSED_TP:
                 self._close(pos, tp2, PositionStatus.CLOSED_TP, c)
                 return
             if c.low <= tp1 and pos.status == PositionStatus.OPEN:
                 pos.status = PositionStatus.TP1
-                pos.notes.append(f"TP1 hit @ {tp1:.6f}")
+                old_stop = pos.stop_loss
+                if pos.stop_loss > pos.entry_price:
+                    pos.stop_loss = pos.entry_price
+                pos.notes.append(
+                    f"TP1 hit @ {tp1:.6f} — stop {old_stop:.6f} → "
+                    f"{pos.stop_loss:.6f} (break-even)"
+                )
         # Unrealized PnL
         pnl = (c.close - pos.entry_price) * pos.size
         if pos.side is Direction.BEARISH:

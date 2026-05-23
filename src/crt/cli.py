@@ -318,11 +318,13 @@ async def _run_chart_once(args: argparse.Namespace) -> int:
         after = [c for c in candles if c.open_time > active.detected_at]
         cisd = evaluate_cisd(active, after)
         alignment = {}
-        for probe_tf in (Timeframe.M1, Timeframe.M15, Timeframe.H1, Timeframe.H4):
-            latest = store.latest(args.symbol, probe_tf)
-            if latest is None:
+        for probe_tf in (Timeframe.M5, Timeframe.M15, Timeframe.H1,
+                         Timeframe.H4, Timeframe.D1, Timeframe.W1):
+            probe_candles = store.get(args.symbol, probe_tf)
+            if not probe_candles:
                 continue
-            alignment[probe_tf.value] = "BULL +" if latest.is_bullish else "BEAR -"
+            ref = probe_candles[-2] if len(probe_candles) > 1 else probe_candles[-1]
+            alignment[probe_tf.value] = "BULL +" if ref.is_bullish else "BEAR -"
         last_candle = candles[-1]
         closes_at = last_candle.open_time + _td(seconds=tf.seconds)
         setup_card = SetupCard(

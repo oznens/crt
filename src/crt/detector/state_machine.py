@@ -27,8 +27,16 @@ from crt.store import CandleStore
 # How many candles to look back when computing the rolling "beefy" baseline.
 BASELINE_WINDOW = 20
 
-# A candle is "beefy" if its body is at least this multiple of the rolling median body.
-BEEFY_MULTIPLIER = 1.4
+# A candle is "beefy" if its body is at least this multiple of the rolling
+# median body. 1.8 (from 1.4) materially cuts false positives on noisy
+# intraday TFs where every other candle had a slightly larger body than
+# the immediate neighbours.
+BEEFY_MULTIPLIER = 1.8
+
+# The range candle's full range (high - low) must also stand out vs the
+# rolling baseline range — this filter catches "beefy body but tiny range"
+# candles that the body-only filter lets through.
+RANGE_VS_BASELINE = 1.2
 
 # Maximum number of candles after the range candle to consider for expansion.
 MAX_LOOKAHEAD = 8
@@ -41,10 +49,19 @@ def _median_body(candles: Iterable[Candle]) -> float:
     return float(statistics.median(bodies))
 
 
-def _is_beefy(candle: Candle, baseline: float) -> bool:
-    if baseline <= 0:
+def _median_range(candles: Iterable[Candle]) -> float:
+    ranges = [c.range for c in candles if c.range > 0]
+    if not ranges:
+        return 0.0
+    return float(statistics.median(ranges))
+
+
+def _is_beefy(candle: Candle, baseline_body: float, baseline_range: float) -> bool:
+    """Pass only when the candle's body AND its total range stand out."""
+    if baseline_body <= 0 or baseline_range <= 0:
         return candle.body > 0
-    return candle.body >= BEEFY_MULTIPLIER * baseline
+    return (candle.body >= BEEFY_MULTIPLIER * baseline_body
+            and candle.range >= RANGE_VS_BASELINE * baseline_range)
 
 
 def _wick_purges(candle: Candle, level: float, direction: Direction) -> bool:
@@ -122,8 +139,9 @@ class CRTDetector:
                 break
             range_candle = candles[i]
             baseline_window = candles[max(0, i - BASELINE_WINDOW): i]
-            baseline = _median_body(baseline_window)
-            if not _is_beefy(range_candle, baseline):
+            baseline_body = _median_body(baseline_window)
+            baseline_range = _median_range(baseline_window)
+            if not _is_beefy(range_candle, baseline_body, baseline_range):
                 continue
 
             following = candles[i + 1:]

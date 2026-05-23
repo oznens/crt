@@ -35,9 +35,11 @@ class TradePlan:
     def from_signal(cls, sig: Signal) -> "TradePlan":
         """Build a plan from a Signal's existing geometry.
 
-        Entry defaults to range mid + small offset toward DOL; stop is
-        just beyond the purge wick. Targets are LHF, initial DOL, and
-        an extended DOL (2× from entry past initial DOL).
+        Per CRT doctrine there are exactly TWO take profits:
+          TP1 = LHF (50% of the range candle)
+          TP2 = Initial DOL (the opposite extreme = CRH for bullish,
+                CRL for bearish)
+        No extended target — anything beyond TP2 is freelance.
         """
         if sig.entry_override is not None and sig.stop_override is not None:
             entry, stop = sig.entry_override, sig.stop_override
@@ -51,12 +53,6 @@ class TradePlan:
                 stop = sig.purge_price + range_size * 0.1
 
         targets = [sig.lhf, sig.initial_dol]
-        if sig.extended_dol is not None:
-            targets.append(sig.extended_dol)
-        else:
-            ext = sig.initial_dol + (sig.initial_dol - sig.lhf)
-            targets.append(ext)
-
         one_r = abs(entry - stop) or 1.0
         r_multiples = [abs(t - entry) / one_r for t in targets]
 

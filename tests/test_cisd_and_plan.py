@@ -81,9 +81,9 @@ def test_trade_plan_from_signal_produces_targets_and_r_multiples():
     assert plan.direction is Direction.BULLISH
     assert plan.entry < plan.targets[-1]
     assert plan.stop < plan.entry
-    assert len(plan.targets) == 3
-    assert len(plan.r_multiples) == 3
-    # All R multiples positive
+    # CRT doctrine: exactly two TPs (LHF + Initial DOL).
+    assert len(plan.targets) == 2
+    assert len(plan.r_multiples) == 2
     assert all(r > 0 for r in plan.r_multiples)
 
 

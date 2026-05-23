@@ -94,3 +94,19 @@ def test_healthz(dashboard):
     r = client.get("/healthz")
     assert r.status_code == 200
     assert r.text == "ok"
+
+
+def test_index_includes_backtest_panel(dashboard):
+    """The HTML page must surface the backtest form so the user can run
+    one without leaving the browser."""
+    client = TestClient(create_app(dashboard))
+    text = client.get("/").text
+    assert "Backtest" in text
+    assert "runBacktest" in text
+    assert "bt-symbols" in text
+
+
+def test_backtest_endpoint_400_without_symbols(dashboard):
+    client = TestClient(create_app(dashboard))
+    r = client.post("/api/backtest", json={"tfs": ["1h"]})
+    assert r.status_code == 400

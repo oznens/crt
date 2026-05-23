@@ -148,6 +148,27 @@ _INDEX_HTML = """<!doctype html>
       </div>
       <div id="chart"></div>
     </div>
+
+    <div class="panel full">
+      <strong>Backtest</strong>
+      <div style="margin: 6px 0;">
+        <span class="muted">Symbols (comma-separated):</span>
+        <input id="bt-symbols" value="BTC_USDT,ETH_USDT,SOL_USDT"
+               style="width:340px" />
+        <span class="muted">TF:</span>
+        <select id="bt-tf">
+          <option>15m</option><option selected>1h</option>
+          <option>4h</option><option>1d</option>
+        </select>
+        <span class="muted">Bars:</span>
+        <input id="bt-bars" type="number" value="500" style="width:80px" />
+        <span class="muted">Risk $:</span>
+        <input id="bt-risk" type="number" value="100" style="width:80px" />
+        <button onclick="runBacktest()" id="bt-run">▶ Run backtest</button>
+        <span id="bt-status" class="muted"></span>
+      </div>
+      <div id="bt-result"></div>
+    </div>
   </div>
 
 <script>
@@ -210,6 +231,72 @@ async function refreshChart() {
   const fig = await r.json();
   Plotly.react('chart', fig.data, fig.layout, {responsive:true});
 }
+async function runBacktest() {
+  const symbols = document.getElementById('bt-symbols').value
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const tf = document.getElementById('bt-tf').value;
+  const bars = parseInt(document.getElementById('bt-bars').value, 10);
+  const risk = parseFloat(document.getElementById('bt-risk').value);
+  const btn = document.getElementById('bt-run');
+  const status = document.getElementById('bt-status');
+  const result = document.getElementById('bt-result');
+  btn.disabled = true;
+  status.textContent = ' · running ' + symbols.length + ' symbols × ' + bars + ' bars ...';
+  result.innerHTML = '';
+  try {
+    const r = await fetch('/api/backtest', {
+      method: 'POST', headers: {'content-type': 'application/json'},
+      body: JSON.stringify({symbols, tfs: [tf], bars, risk}),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      status.textContent = ' · error: ' + text;
+      return;
+    }
+    const d = await r.json();
+    status.textContent = ' · done.';
+    let html = `
+      <table>
+        <tr><th>Period</th><td>${d.symbols.length} symbols · ${d.tfs.join(',')} · ${d.bars} bars</td></tr>
+        <tr><th>Balance</th><td>${d.starting_balance.toFixed(2)} → ${d.ending_balance.toFixed(2)}
+            <span class="${d.pnl>=0?'pos':'neg'}">(${d.pnl>=0?'+':''}${d.pnl.toFixed(2)}, ${d.return_pct.toFixed(2)}%)</span></td></tr>
+        <tr><th>Trades</th><td>${d.n_signals} signals · ${d.n_positions} positions
+            · W ${d.wins} · L ${d.losses} · WR ${d.win_rate.toFixed(1)}%</td></tr>
+        <tr><th>Avg win / loss</th><td>${d.avg_win.toFixed(2)} / ${d.avg_loss.toFixed(2)}
+            · expectancy ${d.expectancy.toFixed(2)} · MDD ${d.max_drawdown.toFixed(2)}</td></tr>
+      </table>`;
+    if (Object.keys(d.by_subtype).length) {
+      html += '<br><strong>By subtype</strong><table><tr><th>Subtype</th><th>Trades</th><th>W</th><th>L</th><th>PnL</th></tr>';
+      for (const [st, b] of Object.entries(d.by_subtype)) {
+        html += `<tr><td>${st}</td><td>${b.trades}</td><td>${b.wins}</td>
+                 <td>${b.losses}</td><td class="${b.pnl>=0?'pos':'neg'}">${b.pnl.toFixed(2)}</td></tr>`;
+      }
+      html += '</table>';
+    }
+    if (Object.keys(d.by_confluence).length) {
+      html += '<br><strong>By confluence bucket</strong><table><tr><th>Bucket</th><th>Trades</th><th>W</th><th>L</th><th>PnL</th></tr>';
+      for (const [bk, b] of Object.entries(d.by_confluence)) {
+        html += `<tr><td>${bk}</td><td>${b.trades}</td><td>${b.wins}</td>
+                 <td>${b.losses}</td><td class="${b.pnl>=0?'pos':'neg'}">${b.pnl.toFixed(2)}</td></tr>`;
+      }
+      html += '</table>';
+    }
+    if (Object.keys(d.by_failure_mode).length) {
+      html += '<br><strong>Failure modes (SL)</strong><table><tr><th>Mode</th><th>Trades</th><th>PnL</th></tr>';
+      for (const [m, b] of Object.entries(d.by_failure_mode)) {
+        html += `<tr><td>${m}</td><td>${b.trades}</td>
+                 <td class="neg">${b.pnl.toFixed(2)}</td></tr>`;
+      }
+      html += '</table>';
+    }
+    result.innerHTML = html;
+  } catch (e) {
+    status.textContent = ' · error: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 refreshState();
 refreshChart();
 setInterval(refreshState, REFRESH_MS);
@@ -317,13 +404,19 @@ class WebDashboard:
             # Build the corner setup card.
             after = [c for c in candles if c.open_time > active.detected_at]
             cisd = evaluate_cisd(active, after)
-            # Per-TF alignment: latest candle's body direction.
+            # Per-TF alignment across the full HTF ladder. Each cell uses
+            # the most-recent CLOSED candle on that TF — that's the body
+            # direction smart-money traders look at when stacking bias.
             alignment: dict[str, str] = {}
-            for probe_tf in (Timeframe.M1, Timeframe.M15, Timeframe.H1, Timeframe.H4):
-                latest = self.store.latest(symbol, probe_tf)
-                if latest is None:
+            for probe_tf in (Timeframe.M5, Timeframe.M15, Timeframe.H1,
+                             Timeframe.H4, Timeframe.D1, Timeframe.W1):
+                probe_candles = self.store.get(symbol, probe_tf)
+                if not probe_candles:
                     continue
-                tag = "BULL +" if latest.is_bullish else "BEAR -"
+                # The very last candle may still be forming; the previous
+                # one is guaranteed closed.
+                ref = probe_candles[-2] if len(probe_candles) > 1 else probe_candles[-1]
+                tag = "BULL +" if ref.is_bullish else "BEAR -"
                 alignment[probe_tf.value] = tag
             # Time-to-close: open_time + tf duration - now.
             last_candle = candles[-1]
@@ -374,6 +467,57 @@ def create_app(dashboard: WebDashboard) -> FastAPI:
         except ValueError as e:
             raise HTTPException(400, f"unknown tf: {tf}") from e
         return JSONResponse(dashboard.chart_payload(symbol, tf_enum))
+
+    @app.post("/api/backtest")
+    async def backtest_endpoint(req: dict):
+        """Run a fresh BacktestRunner over the requested symbols/TF/bars
+        and return a JSON-shaped report. Used by the "Backtest" panel
+        in the dashboard."""
+        from crt.backtest import BacktestRunner
+        from crt.data.bybit import BybitClient
+        from crt.paper import PaperConfig
+
+        symbols = req.get("symbols") or []
+        if not symbols:
+            raise HTTPException(400, "symbols list required")
+        tfs = [Timeframe(t) for t in (req.get("tfs") or ["1h"])]
+        bars = int(req.get("bars", 500))
+        risk = float(req.get("risk", 100.0))
+        balance = float(req.get("balance", 10_000.0))
+
+        runner = BacktestRunner(
+            symbols=symbols, timeframes=tfs,
+            paper_config=PaperConfig(starting_balance=balance, risk_per_trade=risk),
+        )
+        async with BybitClient() as client:
+            await runner.load_from_exchange(client, limit_per_tf=bars)
+        report = runner.report()
+
+        return JSONResponse({
+            "symbols": symbols,
+            "tfs": [t.value for t in tfs],
+            "bars": bars,
+            "starting_balance": report.starting_balance,
+            "ending_balance": report.ending_balance,
+            "pnl": report.total_pnl,
+            "return_pct": report.return_pct,
+            "wins": report.wins,
+            "losses": report.losses,
+            "win_rate": report.win_rate,
+            "avg_win": report.avg_win,
+            "avg_loss": report.avg_loss,
+            "expectancy": report.expectancy,
+            "max_drawdown": report.max_drawdown,
+            "n_signals": len(report.signals),
+            "n_positions": len(report.positions),
+            "by_subtype": {
+                st.value: b for st, b in report.by_subtype().items()
+            },
+            "by_failure_mode": {
+                mode.value: b for mode, b in report.failure_breakdown.items()
+            },
+            "by_confluence": report.by_confluence_bucket(),
+        })
 
     @app.get("/healthz")
     async def healthz():
