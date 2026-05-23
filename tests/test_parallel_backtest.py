@@ -39,9 +39,12 @@ def _bullish_classic_sequence(symbol: str, tf: Timeframe, start: datetime):
     c2 = mk_candle(symbol, tf, t + timedelta(seconds=tf.seconds), 98.5, 99.2, 97.6, 99.0)
     c3 = mk_candle(symbol, tf, t + timedelta(seconds=tf.seconds * 2),
                    99.0, 102.0, 98.8, 101.5)
+    # Retracement candle fills the pending limit at ~98.25.
     c4 = mk_candle(symbol, tf, t + timedelta(seconds=tf.seconds * 3),
-                   101.5, 103.0, 101.0, 102.5)  # hits both TPs
-    return filler + [c1, c2, c3, c4]
+                   98.50, 99.00, 98.10, 98.70)
+    c5 = mk_candle(symbol, tf, t + timedelta(seconds=tf.seconds * 4),
+                   98.70, 103.0, 98.50, 102.5)  # hits both TPs
+    return filler + [c1, c2, c3, c4, c5]
 
 
 def _flat_sequence(symbol: str, tf: Timeframe, start: datetime):

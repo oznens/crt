@@ -126,6 +126,17 @@ _INDEX_HTML = """<!doctype html>
     </div>
 
     <div class="panel full">
+      <strong>Pending orders</strong> <span class="muted" id="pending-count">(0)</span>
+      <table>
+        <thead><tr>
+          <th>Symbol</th><th>TF</th><th>Side</th><th>Entry</th><th>Stop</th>
+          <th>TPs</th><th>Placed at</th>
+        </tr></thead>
+        <tbody id="pending"></tbody>
+      </table>
+    </div>
+
+    <div class="panel full">
       <strong>Open positions</strong>
       <table>
         <thead><tr>
@@ -234,6 +245,17 @@ async function refreshState() {
        <td>${g.confidence.toFixed(2)}</td>
        <td class="${g.confluence>=5?'pos':(g.confluence>=1?'':'neg')}">
          ${g.confluence.toFixed(1)}</td>
+     </tr>`
+  ).join('');
+
+  document.getElementById('pending-count').textContent = `(${s.pending.length})`;
+  document.getElementById('pending').innerHTML = s.pending.map(p =>
+    `<tr>
+       <td>${p.symbol}</td><td>${p.tf}</td>
+       <td>${dirChip(p.side)}</td>
+       <td>${p.entry.toFixed(4)}</td><td>${p.stop.toFixed(4)}</td>
+       <td>${p.tps.map(t=>t.toFixed(4)).join('/')}</td>
+       <td>${fmtTime(p.opened_at)}</td>
      </tr>`
   ).join('');
 
@@ -469,6 +491,7 @@ class WebDashboard:
             "watchlist": watchlist,
             "signals": [_signal_to_json(s) for s in reversed(self.recent_signals)],
             "positions": [_position_to_json(p) for p in self.engine.open_positions],
+            "pending": [_position_to_json(p) for p in self.engine.pending_orders],
         }
 
     # --------------------------------------------- chart for /api/chart

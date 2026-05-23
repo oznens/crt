@@ -119,6 +119,14 @@ class Signal:
 
 
 class PositionStatus(str, Enum):
+    # Pre-fill lifecycle: a signal printed but price hasn't retraced to
+    # the entry yet. The order is a parked limit at entry; mark-to-market
+    # only checks if price reaches it, blows the stop without filling, or
+    # times out.
+    PENDING = "pending"
+    PENDING_CANCELLED = "pending_cancelled"
+    PENDING_EXPIRED = "pending_expired"
+    # Filled lifecycle.
     OPEN = "open"
     TP1 = "tp1_hit"
     TP2 = "tp2_hit"
@@ -132,9 +140,13 @@ class PaperPosition:
     signal: Signal
     entry_price: float
     stop_loss: float
-    take_profits: list[float]  # [LHF, Initial DOL, Extended DOL]
+    take_profits: list[float]  # [LHF, Initial DOL]
     size: float
     opened_at: datetime
+    # Distinct from opened_at: opened_at is when the parking-the-limit
+    # event happened (signal time); filled_at is when price actually
+    # crossed entry. Equal when the engine still opens optimistically.
+    filled_at: datetime | None = None
     status: PositionStatus = PositionStatus.OPEN
     closed_at: datetime | None = None
     realized_pnl: float = 0.0
@@ -144,6 +156,10 @@ class PaperPosition:
     @property
     def side(self) -> Direction:
         return self.signal.direction
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status is PositionStatus.PENDING
 
 
 def utc_now() -> datetime:

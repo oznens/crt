@@ -85,14 +85,16 @@ def test_kod_moves_stop_to_break_even_in_backtest():
     c1 = mk_candle(SYM, TF, t, 100.0, 100.5, 98.0, 98.5)
     c2 = mk_candle(SYM, TF, t + td(hours=1), 98.5, 99.2, 97.6, 99.0)
     c3 = mk_candle(SYM, TF, t + td(hours=2), 99.0, 102.0, 98.8, 101.5)
-    # c4: baseline post-signal candle — sets rolling extreme low ≈ 99.
-    # Must NOT push price to TP2 (initial_dol = 100.5), so keep high < 100.5.
-    c4 = mk_candle(SYM, TF, t + td(hours=3), 99.5, 100.0, 99.0, 99.5)
+    # c4: retrace candle — straddles the computed entry (~98.25) so the
+    # pending limit fills, AND becomes the baseline post-signal candle
+    # for KOD rolling-extreme tracking. Stay below TP1 (=99.25) so the
+    # TP1 trail isn't what moves the stop.
+    c4 = mk_candle(SYM, TF, t + td(hours=3), 99.0, 99.2, 98.10, 99.1)
     # KOD spike-down: low dips below c4.low * (1 - 0.0015), body recovers
     # above c4.low. Must stay above paper stop (~97.35).
-    kod_spike = mk_candle(SYM, TF, t + td(hours=4), 99.5, 99.8, 98.5, 99.6)
-    # Confirmation: closes above kod_spike.high, but not above TP2 yet.
-    kod_confirm = mk_candle(SYM, TF, t + td(hours=5), 99.6, 100.0, 99.6, 99.9)
+    kod_spike = mk_candle(SYM, TF, t + td(hours=4), 98.50, 98.60, 97.94, 98.15)
+    # Confirmation: closes above kod_spike.high, but not above TP1 yet.
+    kod_confirm = mk_candle(SYM, TF, t + td(hours=5), 98.15, 98.80, 98.10, 98.70)
 
     runner = BacktestRunner(
         symbols=[SYM], timeframes=[TF],

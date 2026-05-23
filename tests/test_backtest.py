@@ -16,15 +16,17 @@ TF = Timeframe.H1
 
 
 def _bullish_classic_sequence(start: datetime) -> list:
-    """30 baseline candles + a Classic-3 bullish CRT + a candle that hits TP2."""
+    """Filler + Classic-3 bullish CRT + retrace fill + TP candle.
+    c4 straddles entry (~98.25) WITHOUT reaching TP1 (=99.25), so the
+    pending order fills clean before c5 takes price to the target."""
     filler = make_filler(SYM, TF, start, 30, base=100.0, body=0.4)
     t = filler[-1].open_time + timedelta(seconds=TF.seconds)
     c1 = mk_candle(SYM, TF, t, 100.0, 100.5, 98.0, 98.5)
     c2 = mk_candle(SYM, TF, t + timedelta(hours=1), 98.5, 99.2, 97.6, 99.0)
     c3 = mk_candle(SYM, TF, t + timedelta(hours=2), 99.0, 102.0, 98.8, 101.5)
-    # c4 sweeps fully above initial DOL → both TPs hit.
-    c4 = mk_candle(SYM, TF, t + timedelta(hours=3), 101.5, 103.0, 101.0, 102.5)
-    return filler + [c1, c2, c3, c4]
+    c4 = mk_candle(SYM, TF, t + timedelta(hours=3), 98.50, 99.00, 98.10, 98.70)
+    c5 = mk_candle(SYM, TF, t + timedelta(hours=4), 98.70, 103.0, 98.50, 102.5)
+    return filler + [c1, c2, c3, c4, c5]
 
 
 def _classic_then_stop_sequence(start: datetime) -> list:
@@ -33,9 +35,9 @@ def _classic_then_stop_sequence(start: datetime) -> list:
     c1 = mk_candle(SYM, TF, t, 100.0, 100.5, 98.0, 98.5)
     c2 = mk_candle(SYM, TF, t + timedelta(hours=1), 98.5, 99.2, 97.6, 99.0)
     c3 = mk_candle(SYM, TF, t + timedelta(hours=2), 99.0, 102.0, 98.8, 101.5)
-    # c4 immediately reverses and breaks the stop.
-    c4 = mk_candle(SYM, TF, t + timedelta(hours=3), 101.5, 101.5, 95.0, 95.5)
-    return filler + [c1, c2, c3, c4]
+    c4 = mk_candle(SYM, TF, t + timedelta(hours=3), 98.50, 99.00, 98.10, 98.70)
+    c5 = mk_candle(SYM, TF, t + timedelta(hours=4), 98.70, 99.00, 95.00, 95.50)
+    return filler + [c1, c2, c3, c4, c5]
 
 
 def test_backtest_report_records_a_winner():

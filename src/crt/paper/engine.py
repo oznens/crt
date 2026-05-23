@@ -1,14 +1,23 @@
 """Paper trading engine driven by detector signals.
 
-Risk model (MVP):
-- Entry: at the purge candle close (next bar open in practice — we use signal.detection price).
-- Stop loss: just beyond the purge wick (buffer = ATR-ish proxy = 0.1× range).
-- Take profits: ladder = [LHF, Initial DOL, Extended DOL or 2× range projection].
-- Position size: fixed `risk_per_trade` USD divided by (entry - stop).
+Order lifecycle:
 
-Position lifecycle:
-- OPEN → TP1 → TP2 → CLOSED_TP (or CLOSED_SL).
-- We mark-to-market on every candle close for the position's symbol+TF.
+    on_signal(sig, fill_candle) → PENDING in `pending_orders`
+       |
+       v   (subsequent candles via on_candle)
+    PENDING --fill→ OPEN in `open_positions`
+           --cancelled→ CLOSED in `closed_positions` (PENDING_CANCELLED)
+           --expired→  CLOSED in `closed_positions` (PENDING_EXPIRED)
+
+    OPEN --TP1 touched→ TP1 (stop trailed to break-even, still in open_positions)
+         --TP2 reached→ CLOSED_TP
+         --SL hit    → CLOSED_SL
+
+Mark-to-market runs on every closed candle. CRT doctrine: entry is a
+limit waiting for retracement into the range, not a market order. A
+pending order is cancelled if price reaches the stop without ever
+filling the entry; it expires if the entry isn't reached within
+`PENDING_LIFETIME_CANDLES`.
 """
 
 from __future__ import annotations
@@ -19,6 +28,13 @@ from dataclasses import dataclass, field
 from crt.models import Candle, Direction, PaperPosition, PositionStatus, Signal, utc_now
 
 log = logging.getLogger(__name__)
+
+
+# How many candles a parked limit order is allowed to live before
+# auto-cancelling. Per CRT doctrine, if entry isn't reached within a
+# handful of candles the setup is stale and a fresh signal should be
+# waited for instead.
+PENDING_LIFETIME_CANDLES = 5
 
 
 @dataclass(slots=True)
@@ -32,6 +48,7 @@ class PaperConfig:
 class PaperEngine:
     config: PaperConfig = field(default_factory=PaperConfig)
     balance: float = field(init=False)
+    pending_orders: list[PaperPosition] = field(default_factory=list)
     open_positions: list[PaperPosition] = field(default_factory=list)
     closed_positions: list[PaperPosition] = field(default_factory=list)
 
@@ -45,16 +62,16 @@ class PaperEngine:
         signal: Signal,
         fill_candle: Candle | None = None,
     ) -> PaperPosition | None:
-        """Open a paper position from a confirmed signal.
+        """Park a PENDING limit order from a confirmed signal.
 
         `fill_candle` is the candle that emitted the signal — its
-        open_time becomes the position's `opened_at` so backtest/replay
-        positions get historically-correct timestamps (otherwise we'd
-        stamp every position with "now"). The full pending-order /
-        limit-fill model is a follow-up; right now we still open
-        optimistically at the computed entry.
+        open_time stamps `opened_at`. The order stays pending until a
+        later candle's [low, high] crosses the entry (FILL), crosses
+        the stop first (CANCELLED), or PENDING_LIFETIME_CANDLES pass
+        (EXPIRED).
         """
-        if any(p.signal is signal for p in self.open_positions):
+        if any(p.signal is signal for p in self.pending_orders
+               + self.open_positions):
             return None
         entry, stop = self._entry_and_stop(signal)
         if entry == stop:
@@ -62,25 +79,54 @@ class PaperEngine:
         risk_per_unit = abs(entry - stop)
         size = self.config.risk_per_trade / risk_per_unit
         tps = self._take_profits(signal)
-        pos = PaperPosition(
+        # Prefer the signal's detected_at so a synthetic test sequence
+        # in 2024 doesn't end up with opened_at = real-time-now (which
+        # would break age-based lifetime expiry).
+        if fill_candle is not None:
+            opened_at = fill_candle.open_time
+        else:
+            opened_at = signal.detected_at or utc_now()
+        pending = PaperPosition(
             signal=signal,
             entry_price=entry,
             stop_loss=stop,
             take_profits=tps,
             size=size,
-            opened_at=utc_now() if fill_candle is None else fill_candle.open_time,
+            opened_at=opened_at,
+            status=PositionStatus.PENDING,
         )
-        self.open_positions.append(pos)
+        self.pending_orders.append(pending)
         log.info(
-            "PAPER OPEN %s %s %s entry=%.6f sl=%.6f tps=%s size=%.4f",
+            "PAPER PENDING %s %s %s entry=%.6f sl=%.6f tps=%s size=%.4f",
             signal.symbol, signal.tf.value, signal.direction.value,
             entry, stop, tps, size,
         )
-        return pos
+        return pending
 
     def on_candle(self, candle: Candle) -> list[PaperPosition]:
-        """Update PnL and check exits for any positions on this symbol/tf."""
-        closed_this_tick: list[PaperPosition] = []
+        """Process pending orders + filled positions for this symbol/tf.
+
+        Returns the list of positions that transitioned to a *terminal*
+        state on this tick (CLOSED_TP / CLOSED_SL / PENDING_CANCELLED /
+        PENDING_EXPIRED).
+        """
+        ended: list[PaperPosition] = []
+
+        # 1) Pending orders — try to fill, cancel, or expire.
+        for pending in list(self.pending_orders):
+            if (pending.signal.symbol != candle.symbol
+                    or pending.signal.tf != candle.tf):
+                continue
+            result = self._process_pending(pending, candle)
+            if result == "filled":
+                self.pending_orders.remove(pending)
+                self.open_positions.append(pending)
+            elif result in ("cancelled", "expired"):
+                self.pending_orders.remove(pending)
+                self.closed_positions.append(pending)
+                ended.append(pending)
+
+        # 2) Filled positions — mark-to-market.
         for pos in list(self.open_positions):
             if pos.signal.symbol != candle.symbol or pos.signal.tf != candle.tf:
                 continue
@@ -88,14 +134,13 @@ class PaperEngine:
             if pos.status in (PositionStatus.CLOSED_TP, PositionStatus.CLOSED_SL):
                 self.open_positions.remove(pos)
                 self.closed_positions.append(pos)
-                closed_this_tick.append(pos)
-        return closed_this_tick
+                ended.append(pos)
+
+        return ended
 
     # ----------------------------------------------------------------- helpers
 
     def _entry_and_stop(self, sig: Signal) -> tuple[float, float]:
-        # Detectors with explicit geometry (e.g. Model #1) can override entry
-        # and stop directly; otherwise we use the classic CRT retrace logic.
         if sig.entry_override is not None and sig.stop_override is not None:
             return sig.entry_override, sig.stop_override
         range_size = sig.range_high - sig.range_low
@@ -112,6 +157,52 @@ class PaperEngine:
         # CRT doctrine: exactly two targets — LHF (50%) and Initial DOL.
         return [sig.lhf, sig.initial_dol]
 
+    def _process_pending(self, pending: PaperPosition, c: Candle) -> str:
+        """Resolve a parked limit order against the current candle.
+
+        Returns one of: "filled" | "cancelled" | "expired" | "still_pending".
+        """
+        bull = pending.side is Direction.BULLISH
+        entry = pending.entry_price
+        stop = pending.stop_loss
+
+        # Stop hit first → cancel before any fill is possible.
+        if bull and c.low <= stop:
+            pending.status = PositionStatus.PENDING_CANCELLED
+            pending.closed_at = c.open_time
+            pending.notes.append(
+                f"PENDING cancelled — candle low {c.low:.6f} reached "
+                f"stop {stop:.6f} before fill"
+            )
+            return "cancelled"
+        if not bull and c.high >= stop:
+            pending.status = PositionStatus.PENDING_CANCELLED
+            pending.closed_at = c.open_time
+            pending.notes.append(
+                f"PENDING cancelled — candle high {c.high:.6f} reached "
+                f"stop {stop:.6f} before fill"
+            )
+            return "cancelled"
+
+        # Entry reached this candle → fill at the limit price.
+        if c.low <= entry <= c.high:
+            pending.status = PositionStatus.OPEN
+            pending.filled_at = c.open_time
+            pending.notes.append(f"FILLED @ {entry:.6f}")
+            return "filled"
+
+        # Lifetime expiry.
+        candle_seconds = pending.signal.tf.seconds
+        age = (c.open_time - pending.opened_at).total_seconds() / candle_seconds
+        if age >= PENDING_LIFETIME_CANDLES:
+            pending.status = PositionStatus.PENDING_EXPIRED
+            pending.closed_at = c.open_time
+            pending.notes.append(
+                f"PENDING expired after {int(age)} candles without fill"
+            )
+            return "expired"
+        return "still_pending"
+
     def _mark_to_market(self, pos: PaperPosition, c: Candle) -> None:
         # Stop hit?
         if pos.side is Direction.BULLISH and c.low <= pos.stop_loss:
@@ -120,8 +211,6 @@ class PaperEngine:
         if pos.side is Direction.BEARISH and c.high >= pos.stop_loss:
             self._close(pos, pos.stop_loss, PositionStatus.CLOSED_SL, c)
             return
-        # TP ladder. CRT doctrine: when TP1 (LHF) is touched, move the
-        # stop to break-even so the remainder runs risk-free toward TP2.
         tp1, tp2 = pos.take_profits[0], pos.take_profits[1]
         if pos.side is Direction.BULLISH:
             if c.high >= tp2 and pos.status != PositionStatus.CLOSED_TP:
