@@ -35,7 +35,15 @@ Reference material:
 
 ```bash
 pip install -e .[dev]
-crt --symbols BTC_USDT ETH_USDT --tf 15m 1h 4h
+
+# auto-pick the top 50 USDT perpetuals by 24h volume (default)
+crt --tf 15m 1h 4h
+
+# or pin an explicit watchlist
+crt --symbols BTC_USDT ETH_USDT SOL_USDT --tf 15m 1h 4h
+
+# adjust universe size
+crt --top 30 --tf 15m 1h
 ```
 
 ## Tests
