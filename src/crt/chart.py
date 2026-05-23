@@ -18,6 +18,7 @@ from crt.context.smt import SMTReading, SMTState
 from crt.detector.kod import KODSignal
 from crt.models import Candle, Direction, PaperPosition, PositionStatus, Signal
 from crt.smc import SMCSnapshot, compute
+from crt.trade_plan import SetupCard, TradePlan
 
 
 def _shapes_for_fvgs(snap: SMCSnapshot, df_index) -> list[dict]:
@@ -163,6 +164,110 @@ def _position_shapes_and_annotations(
     return shapes, annotations
 
 
+def _trade_plan_shapes_and_annotations(
+    plan: TradePlan,
+    sig: Signal,
+    df_index,
+) -> tuple[list[dict], list[dict]]:
+    """Render a TradePlan as TradingView-style RISK / REWARD boxes plus
+    R-multiple labels along the right edge."""
+    shapes: list[dict] = []
+    annotations: list[dict] = []
+    if len(df_index) == 0:
+        return shapes, annotations
+    x0 = sig.detected_at
+    x1 = df_index[-1]
+    bull = plan.direction is Direction.BULLISH
+
+    # RISK box: from entry to stop (red translucent)
+    risk_top = max(plan.entry, plan.stop)
+    risk_bot = min(plan.entry, plan.stop)
+    shapes.append(dict(
+        type="rect", xref="x", yref="y",
+        x0=x0, x1=x1, y0=risk_bot, y1=risk_top,
+        line=dict(color="rgba(239, 83, 80, 0.7)", width=1),
+        fillcolor="rgba(239, 83, 80, 0.15)", layer="below",
+    ))
+
+    # REWARD box: from entry to the FURTHEST target (green translucent)
+    if plan.targets:
+        far_tp = plan.targets[-1]
+        rew_top = max(plan.entry, far_tp)
+        rew_bot = min(plan.entry, far_tp)
+        shapes.append(dict(
+            type="rect", xref="x", yref="y",
+            x0=x0, x1=x1, y0=rew_bot, y1=rew_top,
+            line=dict(color="rgba(38, 198, 218, 0.7)", width=1),
+            fillcolor="rgba(76, 175, 80, 0.13)", layer="below",
+        ))
+
+    # R-multiple gridlines + labels for each TP
+    for tp, r in zip(plan.targets, plan.r_multiples):
+        signed_r = r if bull else r  # always positive
+        shapes.append(dict(
+            type="line", xref="x", yref="y",
+            x0=x0, x1=x1, y0=tp, y1=tp,
+            line=dict(color="rgba(255, 255, 255, 0.18)", width=1, dash="dot"),
+        ))
+        annotations.append(dict(
+            x=x1, y=tp, xref="x", yref="y",
+            text=f"<b>{signed_r:.2f}R</b>",
+            showarrow=False, xanchor="right", yanchor="middle",
+            font=dict(size=10, color="#fff"),
+            bgcolor="rgba(38, 198, 218, 0.55)",
+            bordercolor="rgba(38, 198, 218, 0.9)", borderpad=2,
+        ))
+
+    # SHORT PLAN / LONG PLAN header
+    plan_label = "SHORT PLAN" if not bull else "LONG PLAN"
+    header_y = risk_top if not bull else risk_bot
+    tp_summary = " | ".join(
+        f"TP{i + 1} {r:.2f}R" for i, r in enumerate(plan.r_multiples)
+    )
+    annotations.append(dict(
+        x=x0, y=header_y, xref="x", yref="y",
+        text=f"<b>{plan_label} | ACTIVE</b><br>{tp_summary}",
+        showarrow=False, xanchor="left",
+        yanchor="bottom" if not bull else "top",
+        font=dict(size=11, color="#fff"),
+        bgcolor="rgba(0, 0, 0, 0.65)",
+        bordercolor="rgba(255, 255, 255, 0.25)", borderpad=4,
+    ))
+    return shapes, annotations
+
+
+def _setup_card_annotation(card: SetupCard) -> dict:
+    """Render the SetupCard as a single multi-line annotation pinned to
+    the bottom-right corner — matches the TradingView CRT PRO+ table.
+    """
+    rows = card.to_table_rows()
+    width = max(len(label) for label, _ in rows) + 2
+    lines = [
+        f"<b>* CRT PRO+</b>",
+        f"<span style='font-size:10px'>{card.symbol}</span>",
+        "",
+    ]
+    for label, value in rows:
+        # Colorise BULL+ / BEAR- alignment cells
+        if value.startswith("BULL"):
+            value_html = f"<span style='color:#56d364'>{value}</span>"
+        elif value.startswith("BEAR"):
+            value_html = f"<span style='color:#f85149'>{value}</span>"
+        else:
+            value_html = value
+        lines.append(f"{label:<{width}}: {value_html}")
+    text = "<br>".join(lines)
+    return dict(
+        xref="paper", yref="paper", x=1.0, y=0.0,
+        xanchor="right", yanchor="bottom",
+        showarrow=False, align="left",
+        text=text,
+        font=dict(size=10, color="#e6edf3", family="ui-monospace, Menlo, monospace"),
+        bgcolor="rgba(13, 17, 23, 0.92)",
+        bordercolor="rgba(88, 166, 255, 0.55)", borderpad=6, borderwidth=1,
+    )
+
+
 def _signal_label(sig: Signal) -> str:
     """Hover text combining subtype, confidence and confluence breakdown."""
     parts = [
@@ -234,6 +339,8 @@ def render_chart(
     smt_reading: SMTReading | None = None,
     positions: Sequence[PaperPosition] = (),
     failure_tagger=None,
+    trade_plans: Sequence[tuple[Signal, TradePlan]] = (),
+    setup_card: SetupCard | None = None,
     *,
     title: str = "",
     swing_length: int = 10,
@@ -357,6 +464,18 @@ def render_chart(
                 line=dict(color=color, width=3),
             ))
 
+    # Trade plans (risk/reward boxes + R-multiple labels)
+    for plan_sig, plan in trade_plans:
+        plan_shapes, plan_annotations = _trade_plan_shapes_and_annotations(
+            plan, plan_sig, df.index,
+        )
+        extra_shapes.extend(plan_shapes)
+        extra_annotations.extend(plan_annotations)
+
+    # Setup card pinned to the bottom-right corner
+    if setup_card is not None:
+        extra_annotations.append(_setup_card_annotation(setup_card))
+
     full_title = title or "CRT scan"
     if smt_reading is not None and smt_reading.is_divergent:
         flag = "🐂" if smt_reading.state is SMTState.BULLISH else "🐻"
@@ -365,6 +484,9 @@ def render_chart(
             f"{smt_reading.state.value}"
         )
 
+    pos_shapes, pos_annotations = _position_shapes_and_annotations(
+        positions, df.index[-1], failure_tagger,
+    )
     fig.update_layout(
         title=full_title,
         xaxis_rangeslider_visible=False,
@@ -375,12 +497,10 @@ def render_chart(
         shapes=(_shapes_for_fvgs(snap, df.index)
                 + _shapes_for_order_blocks(snap, df.index)
                 + extra_shapes
-                + _position_shapes_and_annotations(positions, df.index[-1],
-                                                   failure_tagger)[0]),
+                + pos_shapes),
         annotations=(_annotations_for_bos(snap, df.index)
                      + extra_annotations
-                     + _position_shapes_and_annotations(positions, df.index[-1],
-                                                        failure_tagger)[1]),
+                     + pos_annotations),
         legend=dict(orientation="h", y=1.05),
     )
     return fig
@@ -394,6 +514,8 @@ def write_chart_html(
     smt_reading: SMTReading | None = None,
     positions: Sequence[PaperPosition] = (),
     failure_tagger=None,
+    trade_plans: Sequence[tuple[Signal, TradePlan]] = (),
+    setup_card: SetupCard | None = None,
     *,
     title: str = "",
     refresh_seconds: int = 0,
@@ -402,7 +524,9 @@ def write_chart_html(
     auto-reloads at that interval so the same URL stays live."""
     fig = render_chart(
         candles, signals, kods=kods, smt_reading=smt_reading,
-        positions=positions, failure_tagger=failure_tagger, title=title,
+        positions=positions, failure_tagger=failure_tagger,
+        trade_plans=trade_plans, setup_card=setup_card,
+        title=title,
     )
     html = fig.to_html(full_html=True, include_plotlyjs="cdn")
     if refresh_seconds > 0:

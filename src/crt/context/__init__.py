@@ -6,6 +6,7 @@ from crt.context.alignment import (
     parent_tf,
     signal_aligned_with_htf,
 )
+from crt.context.cisd import CISDReading, CISDStatus, evaluate_cisd
 from crt.context.confluence import ConfluenceScore, score_signal
 from crt.context.smt import SMTMonitor, SMTReading, SMTState
 from crt.context.time_windows import (
@@ -35,4 +36,7 @@ __all__ = [
     "SMTMonitor",
     "SMTReading",
     "SMTState",
+    "CISDStatus",
+    "CISDReading",
+    "evaluate_cisd",
 ]

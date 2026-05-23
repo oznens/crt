@@ -20,13 +20,17 @@ from typing import Iterable
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
+from datetime import timedelta
+
 from crt.chart import render_chart
-from crt.context import SMTMonitor, score_signal
+from crt.context import SMTMonitor, evaluate_cisd, parent_tf, score_signal
+from crt.context.cisd import CISDStatus
 from crt.detector import detect_kod
-from crt.models import PaperPosition, PositionStatus, Signal, Timeframe
+from crt.models import Direction, PaperPosition, PositionStatus, Signal, Timeframe
 from crt.paper import PaperEngine, classify as classify_failure
 from crt.smc import compute as compute_smc
 from crt.store import CandleStore
+from crt.trade_plan import SetupCard, TradePlan
 
 
 def _signal_to_json(s: Signal) -> dict:
@@ -299,11 +303,54 @@ class WebDashboard:
         def _tagger(p):
             return classify_failure(p, self.store, self.smt)
 
+        # Trade plans for the LAST signal (the active one) only — keeps
+        # the chart from getting buried under risk/reward boxes when many
+        # signals print on the same window.
+        trade_plans: list[tuple[Signal, TradePlan]] = []
+        setup_card: SetupCard | None = None
+        smt_reading = None
+        if relevant_signals:
+            active = relevant_signals[-1]
+            trade_plans.append((active, TradePlan.from_signal(active)))
+            smt_reading = self.smt.reading(symbol, tf, active.direction)
+
+            # Build the corner setup card.
+            after = [c for c in candles if c.open_time > active.detected_at]
+            cisd = evaluate_cisd(active, after)
+            # Per-TF alignment: latest candle's body direction.
+            alignment: dict[str, str] = {}
+            for probe_tf in (Timeframe.M1, Timeframe.M15, Timeframe.H1, Timeframe.H4):
+                latest = self.store.latest(symbol, probe_tf)
+                if latest is None:
+                    continue
+                tag = "BULL +" if latest.is_bullish else "BEAR -"
+                alignment[probe_tf.value] = tag
+            # Time-to-close: open_time + tf duration - now.
+            last_candle = candles[-1]
+            closes_at = last_candle.open_time + timedelta(seconds=tf.seconds)
+            setup_card = SetupCard(
+                symbol=symbol,
+                ltf_tf=tf,
+                htf_tf=parent_tf(tf),
+                model="BULL" if active.direction is Direction.BULLISH else "BEAR",
+                bias="LONG" if active.direction is Direction.BULLISH else "SHORT",
+                level=active.range_high if active.direction is Direction.BEARISH
+                      else active.range_low,
+                c2_status="CONF",
+                cisd_status=cisd.status,
+                smt_pair=(f"{symbol}+{self.smt.pair_for(symbol)}"
+                          if self.smt.pair_for(symbol) else None),
+                smt_state=smt_reading.state if smt_reading else None,  # type: ignore[arg-type]
+                tf_alignment=alignment,
+                closes_at=closes_at,
+                confluence=active.confluence_score,
+            )
+
         fig = render_chart(
             candles, relevant_signals,
-            kods=kods, smt_reading=self.smt.reading(symbol, tf, relevant_signals[-1].direction)
-                if relevant_signals else None,
+            kods=kods, smt_reading=smt_reading,
             positions=relevant_positions, failure_tagger=_tagger,
+            trade_plans=trade_plans, setup_card=setup_card,
             title=f"{symbol} {tf.value}",
         )
         return json.loads(fig.to_json())

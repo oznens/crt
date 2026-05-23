@@ -305,10 +305,45 @@ async def _run_chart_once(args: argparse.Namespace) -> int:
         # `classify_failure` needs the runner's store + SMT to label SL closes.
         failure_tagger = lambda p: classify_failure(p, runner.store, runner.smt)
 
+    # Build the most-recent setup card + trade plan so the chart looks
+    # like the TradingView CRT PRO+ overlay (risk/reward boxes + corner card).
+    from datetime import timedelta as _td
+    from crt.context import evaluate_cisd, parent_tf
+    from crt.trade_plan import SetupCard, TradePlan
+    trade_plans: list = []
+    setup_card = None
+    if signals:
+        active = signals[-1]
+        trade_plans.append((active, TradePlan.from_signal(active)))
+        after = [c for c in candles if c.open_time > active.detected_at]
+        cisd = evaluate_cisd(active, after)
+        alignment = {}
+        for probe_tf in (Timeframe.M1, Timeframe.M15, Timeframe.H1, Timeframe.H4):
+            latest = store.latest(args.symbol, probe_tf)
+            if latest is None:
+                continue
+            alignment[probe_tf.value] = "BULL +" if latest.is_bullish else "BEAR -"
+        last_candle = candles[-1]
+        closes_at = last_candle.open_time + _td(seconds=tf.seconds)
+        setup_card = SetupCard(
+            symbol=args.symbol, ltf_tf=tf, htf_tf=parent_tf(tf),
+            model="BULL" if active.direction is Direction.BULLISH else "BEAR",
+            bias="LONG" if active.direction is Direction.BULLISH else "SHORT",
+            level=(active.range_high if active.direction is Direction.BEARISH
+                   else active.range_low),
+            c2_status="CONF", cisd_status=cisd.status,
+            smt_pair=(f"{args.symbol}+{smt.pair_for(args.symbol)}"
+                      if smt.pair_for(args.symbol) else None),
+            smt_state=smt_reading.state if smt_reading else None,
+            tf_alignment=alignment, closes_at=closes_at,
+            confluence=active.confluence_score,
+        )
+
     write_chart_html(
         candles, signals, out,
         kods=kods, smt_reading=smt_reading,
         positions=positions, failure_tagger=failure_tagger,
+        trade_plans=trade_plans, setup_card=setup_card,
         title=f"{args.symbol} {tf.value}  ·  {len(candles)} bars  "
               f"·  {len(signals)} signals  ·  {len(kods)} KOD"
               + (f"  ·  {len(positions)} positions" if positions else ""),
