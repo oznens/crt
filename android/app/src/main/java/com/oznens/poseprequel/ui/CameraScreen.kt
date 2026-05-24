@@ -49,6 +49,7 @@ import com.oznens.poseprequel.capture.PhotoSaver
 import com.oznens.poseprequel.filter.Filter
 import com.oznens.poseprequel.filter.Filters
 import com.oznens.poseprequel.pose.PoseAnalyzer
+import com.oznens.poseprequel.pose.PoseSmoother
 import com.oznens.poseprequel.pose.PoseSuggester
 import com.oznens.poseprequel.pose.PoseTemplate
 import com.oznens.poseprequel.pose.PoseTemplates
@@ -62,16 +63,22 @@ fun CameraScreen() {
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val captureExecutor = remember { Executors.newSingleThreadExecutor() }
     val suggester = remember { PoseSuggester() }
+    val smoother = remember { PoseSmoother(alpha = 0.4f) }
 
     var filter by remember { mutableStateOf(Filters.default) }
     var template by remember { mutableStateOf<PoseTemplate>(PoseTemplates.ALL.first()) }
     var score by remember { mutableStateOf(0) }
     var detectedPoints by remember { mutableStateOf<Map<Int, Pair<Float, Float>>>(emptyMap()) }
+    var imageAspect by remember { mutableStateOf(0.75f) }  // 4:3 portrait default
     var lensFront by remember { mutableStateOf(true) }
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var isCapturing by remember { mutableStateOf(false) }
     var flashOn by remember { mutableStateOf(false) }
+
+    // When the lens flips, drop the EMA buffer so the skeleton doesn't snap
+    // from one mirrored position to the other.
+    LaunchedEffect(lensFront) { smoother.reset() }
 
     // Re-apply RenderEffect whenever the filter changes (API 31+).
     LaunchedEffect(filter, previewViewRef) {
@@ -128,13 +135,21 @@ fun CameraScreen() {
                     it.setSurfaceProvider(view.surfaceProvider)
                 }
                 val analyzer = PoseAnalyzer { pose, w, h ->
-                    suggester.imageWidth = w
-                    suggester.imageHeight = h
-                    val match = suggester.match(pose, template)
-                    score = match?.score ?: 0
-                    detectedPoints = pose.allPoseLandmarks
-                        .filter { it.inFrameLikelihood > 0.5f }
-                        .associate { it.landmarkType to (it.position.x / w to it.position.y / h) }
+                    if (w > 0 && h > 0) imageAspect = w.toFloat() / h.toFloat()
+                    // Build a normalized point map in *view-aligned* image space:
+                    // mirror x for the front camera so right-hand-up in the
+                    // mirrored preview lines up with the template's right-hand.
+                    val raw = HashMap<Int, Pair<Float, Float>>()
+                    for (lm in pose.allPoseLandmarks) {
+                        if (lm.inFrameLikelihood < 0.5f) continue
+                        val nx0 = lm.position.x / w
+                        val ny = lm.position.y / h
+                        val nx = if (lensFront) 1f - nx0 else nx0
+                        raw[lm.landmarkType] = nx to ny
+                    }
+                    val smoothed = smoother.update(raw)
+                    detectedPoints = smoothed
+                    score = suggester.matchPoints(smoothed, template)?.score ?: 0
                 }
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -156,10 +171,11 @@ fun CameraScreen() {
             }, ContextCompat.getMainExecutor(context))
         }
 
-        // 3) Pose template ghost + detected skeleton overlay
+        // 3) Pose template silhouette + faint live skeleton
         PoseOverlay(
             template = template,
             detected = detectedPoints,
+            imageAspect = imageAspect,
             modifier = Modifier.fillMaxSize(),
         )
 
