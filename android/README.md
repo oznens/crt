@@ -58,14 +58,17 @@ açılışta Android Studio veya `gradle wrapper` ile üretilir.
 
 ## Sürüm Notları
 
-- minSdk 26 — ML Kit ve CameraX güvenli alt sınır.
+- minSdk 29 — scoped storage sayesinde foto kaydı için ekstra
+  izin gerekmiyor (MediaStore Pictures/PosePrequel klasörüne yazar).
 - RenderEffect API 31+. Daha düşük sürüm için
   `Filter.colorFilter()` ile bir overlay Compose `Image`'ı çizmek gerek.
+  Çekilen foto her cihazda filtreyi alır — RenderEffect sadece preview
+  içindir, biz `PhotoSaver` içinde aynı ColorMatrix'i bitmap'e uyguluyoruz.
 
 ## Sonraki Adımlar (MVP'den sonra)
 
-- [ ] `ImageCapture.takePicture(...)` ile çekim, MediaStore'a kayıt
-- [ ] Çekim öncesi filtreyi yakalanan bitmap'e de uygula (PreviewView
+- [x] `ImageCapture.takePicture(...)` ile çekim, MediaStore'a kayıt
+- [x] Çekim öncesi filtreyi yakalanan bitmap'e de uygula (PreviewView
       RenderEffect sadece preview'da çalışıyor)
 - [ ] Daha fazla şablon poz — gerçek görsellerden ML Kit ile keypoint
       çıkartıp `PoseTemplates`'a düşür

@@ -10,7 +10,9 @@ android {
 
     defaultConfig {
         applicationId = "com.oznens.poseprequel"
-        minSdk = 26
+        // minSdk 29 keeps us on scoped storage — no WRITE_EXTERNAL_STORAGE
+        // permission needed to write to Pictures/PosePrequel via MediaStore.
+        minSdk = 29
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
