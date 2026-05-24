@@ -2,12 +2,15 @@ package com.oznens.poseprequel.ui
 
 import android.os.Build
 import android.view.ViewGroup
+import android.widget.Toast
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,17 +40,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.oznens.poseprequel.capture.PhotoSaver
 import com.oznens.poseprequel.filter.Filter
 import com.oznens.poseprequel.filter.Filters
 import com.oznens.poseprequel.pose.PoseAnalyzer
 import com.oznens.poseprequel.pose.PoseSuggester
 import com.oznens.poseprequel.pose.PoseTemplate
 import com.oznens.poseprequel.pose.PoseTemplates
+import kotlinx.coroutines.delay
 import java.util.concurrent.Executors
 
 @Composable
@@ -55,6 +60,7 @@ fun CameraScreen() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    val captureExecutor = remember { Executors.newSingleThreadExecutor() }
     val suggester = remember { PoseSuggester() }
 
     var filter by remember { mutableStateOf(Filters.default) }
@@ -63,6 +69,9 @@ fun CameraScreen() {
     var detectedPoints by remember { mutableStateOf<Map<Int, Pair<Float, Float>>>(emptyMap()) }
     var lensFront by remember { mutableStateOf(true) }
     var previewViewRef by remember { mutableStateOf<PreviewView?>(null) }
+    var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    var isCapturing by remember { mutableStateOf(false) }
+    var flashOn by remember { mutableStateOf(false) }
 
     // Re-apply RenderEffect whenever the filter changes (API 31+).
     LaunchedEffect(filter, previewViewRef) {
@@ -71,8 +80,24 @@ fun CameraScreen() {
         }
     }
 
+    // Fade the white flash overlay off shortly after a shot.
+    LaunchedEffect(flashOn) {
+        if (flashOn) {
+            delay(80)
+            flashOn = false
+        }
+    }
+    val flashAlpha by animateFloatAsState(
+        targetValue = if (flashOn) 0.9f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "flash",
+    )
+
     DisposableEffect(Unit) {
-        onDispose { analysisExecutor.shutdown() }
+        onDispose {
+            analysisExecutor.shutdown()
+            captureExecutor.shutdown()
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -126,6 +151,7 @@ fun CameraScreen() {
                     provider.bindToLifecycle(
                         lifecycleOwner, selector, preview, analysis, capture,
                     )
+                    imageCapture = capture
                 }
             }, ContextCompat.getMainExecutor(context))
         }
@@ -163,7 +189,37 @@ fun CameraScreen() {
                 onSelect = { filter = it },
             )
             ShutterRow(
+                enabled = imageCapture != null && !isCapturing,
                 onFlip = { lensFront = !lensFront },
+                onCapture = {
+                    val capture = imageCapture ?: return@ShutterRow
+                    isCapturing = true
+                    flashOn = true
+                    PhotoSaver.capture(
+                        imageCapture = capture,
+                        executor = captureExecutor,
+                        filter = filter,
+                        contentResolver = context.contentResolver,
+                    ) { result ->
+                        ContextCompat.getMainExecutor(context).execute {
+                            isCapturing = false
+                            val msg = result.fold(
+                                onSuccess = { "Kaydedildi: Pictures/PosePrequel" },
+                                onFailure = { "Çekim başarısız: ${it.message}" },
+                            )
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+            )
+        }
+
+        // 6) White flash overlay on top of everything during capture
+        if (flashAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White.copy(alpha = flashAlpha)),
             )
         }
     }
@@ -244,7 +300,11 @@ private fun FilterStrip(
 }
 
 @Composable
-private fun ShutterRow(onFlip: () -> Unit) {
+private fun ShutterRow(
+    enabled: Boolean,
+    onFlip: () -> Unit,
+    onCapture: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -254,8 +314,8 @@ private fun ShutterRow(onFlip: () -> Unit) {
         Surface(
             modifier = Modifier.size(72.dp),
             shape = CircleShape,
-            color = Color.White,
-            onClick = { /* TODO: ImageCapture.takePicture(...) */ },
+            color = if (enabled) Color.White else Color(0xFFBBBBBB),
+            onClick = { if (enabled) onCapture() },
         ) {}
         Button(
             onClick = onFlip,
