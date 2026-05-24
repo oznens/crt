@@ -14,6 +14,20 @@ data class PoseTemplate(
 ) {
     val landmarkIds: Set<Int> get() = points.keys
 
+    /**
+     * Returns the template scaled around the frame center and shifted in y.
+     * Used to shrink the full-body template into a selfie-framed silhouette
+     * for the front camera, where the user typically appears from the waist
+     * up rather than head-to-toe.
+     */
+    fun scaledAndShifted(scale: Float, offsetY: Float): PoseTemplate = copy(
+        points = points.mapValues { (_, p) ->
+            val nx = 0.5f + (p.first - 0.5f) * scale
+            val ny = 0.5f + (p.second - 0.5f) * scale + offsetY
+            nx to ny
+        },
+    )
+
     companion object {
         // Keypoints we care about across every template.
         val SCORED_LANDMARKS = listOf(

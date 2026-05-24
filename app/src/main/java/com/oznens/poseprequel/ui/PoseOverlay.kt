@@ -6,27 +6,31 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import com.google.mlkit.vision.pose.PoseLandmark
 import com.oznens.poseprequel.pose.PoseTemplate
+import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 
 /**
- * Renders the pose target as a single smooth silhouette (Huawei-style) plus
- * a faint live skeleton so the user gets feedback that detection is working.
+ * Huawei-style pose target rendered as a single uniform-thickness outline
+ * (no internal seams), plus a very faint live skeleton for "detection is
+ * working" feedback.
  *
- * All coordinates are expressed in 0..1 image-normalized space, with the
- * mirror already applied upstream for the front camera. This composable
- * handles the FILL_CENTER mapping from image-normalized to view coords.
+ * Outline trick: every body part is a capsule or circle. We render the
+ * full silhouette filled white on an offscreen layer, then redraw the same
+ * silhouette with limb widths/head radius reduced by `2 * outlinePx` using
+ * `BlendMode.Clear` — the interior is erased, leaving a clean outline.
  *
- * @param imageAspect Source image width / height. The PreviewView uses
- *        FILL_CENTER, so we apply the same scale + center-crop here.
+ * Coordinates are 0..1 image-normalized (already mirrored upstream for the
+ * front camera). This composable applies the FILL_CENTER transform from
+ * image space to view space, matching the PreviewView's scaleType.
  */
 @Composable
 fun PoseOverlay(
@@ -36,44 +40,69 @@ fun PoseOverlay(
     modifier: Modifier = Modifier,
 ) {
     Box(modifier = modifier) {
-        // 1) Static silhouette ghost — drawn on an offscreen layer so all body
-        //    parts composite at uniform alpha (no visible internal seams).
+
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    compositingStrategy = CompositingStrategy.Offscreen
-                    alpha = 0.5f
-                },
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
         ) {
-            drawSilhouette(template.points, imageAspect, Color.White)
+            val outline = min(size.width, size.height) * 0.006f // ~7px on 1080w
+            // Outer filled silhouette
+            drawSilhouette(
+                points = template.points,
+                imageAspect = imageAspect,
+                color = Color.White.copy(alpha = 0.9f),
+            )
+            // Erase interior to leave only the outline ring
+            drawSilhouette(
+                points = template.points,
+                imageAspect = imageAspect,
+                color = Color.White,            // ignored for Clear
+                widthDelta = -outline * 2f,
+                blendMode = BlendMode.Clear,
+            )
         }
 
-        // 2) Faint live skeleton — pink hairlines, ~25% alpha. Smoothed by
-        //    PoseSmoother upstream so it shouldn't twitch frame-to-frame.
+        // Faint live skeleton — smoothed upstream, drawn behind the outline.
         Canvas(modifier = Modifier.fillMaxSize()) {
-            drawLiveSkeleton(detected, imageAspect, Color(0xFFFF4D8D).copy(alpha = 0.35f))
+            drawLiveSkeleton(
+                points = detected,
+                imageAspect = imageAspect,
+                color = Color(0xFFFF4D8D).copy(alpha = 0.30f),
+            )
         }
     }
 }
 
-/** FILL_CENTER mapping from image-normalized point to view-space [Offset]. */
+/**
+ * Maps a normalized image-space point (0..1, top-left origin) to view-space
+ * using the same FILL_CENTER scaling the PreviewView applies. Returns view
+ * pixels.
+ */
 private fun DrawScope.mapPoint(nx: Float, ny: Float, imageAspect: Float): Offset {
     val viewW = size.width
     val viewH = size.height
-    // Scale so the unit-height image (h=1, w=imageAspect) covers the view.
+    // Unit-height image (h=1, w=imageAspect) scaled to cover the view.
     val scale = max(viewW / imageAspect, viewH)
     val scaledW = imageAspect * scale
     val scaledH = scale
-    val vx = (nx - 0.5f) * scaledW + viewW / 2f
-    val vy = (ny - 0.5f) * scaledH + viewH / 2f
-    return Offset(vx, vy)
+    return Offset(
+        (nx - 0.5f) * scaledW + viewW / 2f,
+        (ny - 0.5f) * scaledH + viewH / 2f,
+    )
 }
 
+/**
+ * Draws the silhouette as a union of capsules + a head circle. Pass a
+ * negative [widthDelta] together with `BlendMode.Clear` to erase the
+ * interior and leave only an outline.
+ */
 private fun DrawScope.drawSilhouette(
     points: Map<Int, Pair<Float, Float>>,
     imageAspect: Float,
     color: Color,
+    widthDelta: Float = 0f,
+    blendMode: BlendMode = DrawScope.DefaultBlendMode,
 ) {
     fun p(id: Int): Offset? = points[id]?.let { mapPoint(it.first, it.second, imageAspect) }
 
@@ -83,58 +112,52 @@ private fun DrawScope.drawSilhouette(
     val rh = p(PoseLandmark.RIGHT_HIP) ?: return
     val nose = p(PoseLandmark.NOSE) ?: return
 
-    val short = kotlin.math.min(size.width, size.height)
-    val armW = short * 0.085f
-    val legW = short * 0.105f
-    val neckW = short * 0.08f
+    val short = min(size.width, size.height)
+    val shoulderSpan = hypot(rs.x - ls.x, rs.y - ls.y)
 
-    // Torso — filled polygon between shoulders and hips.
-    val torso = Path().apply {
-        moveTo(ls.x, ls.y)
-        lineTo(rs.x, rs.y)
-        lineTo(rh.x, rh.y)
-        lineTo(lh.x, lh.y)
-        close()
+    fun w(base: Float) = (base + widthDelta).coerceAtLeast(0f)
+    fun r(base: Float) = (base + widthDelta / 2f).coerceAtLeast(0f)
+
+    val torsoW = w(shoulderSpan * 1.05f)
+    val armW = w(short * 0.085f)
+    val legW = w(short * 0.105f)
+    val neckW = w(short * 0.075f)
+    val headR = r(short * 0.075f)
+
+    val shoulderMid = Offset((ls.x + rs.x) / 2f, (ls.y + rs.y) / 2f)
+    val hipMid = Offset((lh.x + rh.x) / 2f, (lh.y + rh.y) / 2f)
+
+    // Torso pill — vertical capsule between shoulder-mid and hip-mid.
+    if (torsoW > 0f) drawLine(
+        color, shoulderMid, hipMid, strokeWidth = torsoW,
+        cap = StrokeCap.Round, blendMode = blendMode,
+    )
+
+    // Neck capsule
+    if (neckW > 0f) drawLine(
+        color, shoulderMid, nose, strokeWidth = neckW,
+        cap = StrokeCap.Round, blendMode = blendMode,
+    )
+
+    // Head circle
+    if (headR > 0f) drawCircle(color, headR, nose, blendMode = blendMode)
+
+    val limbs = listOf(
+        Triple(PoseLandmark.LEFT_SHOULDER, PoseLandmark.LEFT_ELBOW, armW),
+        Triple(PoseLandmark.LEFT_ELBOW, PoseLandmark.LEFT_WRIST, armW),
+        Triple(PoseLandmark.RIGHT_SHOULDER, PoseLandmark.RIGHT_ELBOW, armW),
+        Triple(PoseLandmark.RIGHT_ELBOW, PoseLandmark.RIGHT_WRIST, armW),
+        Triple(PoseLandmark.LEFT_HIP, PoseLandmark.LEFT_KNEE, legW),
+        Triple(PoseLandmark.LEFT_KNEE, PoseLandmark.LEFT_ANKLE, legW),
+        Triple(PoseLandmark.RIGHT_HIP, PoseLandmark.RIGHT_KNEE, legW),
+        Triple(PoseLandmark.RIGHT_KNEE, PoseLandmark.RIGHT_ANKLE, legW),
+    )
+    for ((a, b, sw) in limbs) {
+        if (sw <= 0f) continue
+        val pa = p(a) ?: continue
+        val pb = p(b) ?: continue
+        drawLine(color, pa, pb, strokeWidth = sw, cap = StrokeCap.Round, blendMode = blendMode)
     }
-    drawPath(torso, color)
-
-    // Neck — fat capsule from shoulder midpoint up to the head.
-    val neck = Offset((ls.x + rs.x) / 2f, (ls.y + rs.y) / 2f)
-    drawLine(color, neck, nose, strokeWidth = neckW, cap = StrokeCap.Round)
-
-    // Head — circle around NOSE.
-    val headR = short * 0.07f
-    drawCircle(color, headR, nose)
-
-    // Arms — capsules at shoulder→elbow→wrist.
-    listOf(
-        PoseLandmark.LEFT_SHOULDER to PoseLandmark.LEFT_ELBOW,
-        PoseLandmark.LEFT_ELBOW to PoseLandmark.LEFT_WRIST,
-        PoseLandmark.RIGHT_SHOULDER to PoseLandmark.RIGHT_ELBOW,
-        PoseLandmark.RIGHT_ELBOW to PoseLandmark.RIGHT_WRIST,
-    ).forEach { (a, b) ->
-        val pa = p(a) ?: return@forEach
-        val pb = p(b) ?: return@forEach
-        drawLine(color, pa, pb, strokeWidth = armW, cap = StrokeCap.Round)
-    }
-
-    // Legs — capsules at hip→knee→ankle.
-    listOf(
-        PoseLandmark.LEFT_HIP to PoseLandmark.LEFT_KNEE,
-        PoseLandmark.LEFT_KNEE to PoseLandmark.LEFT_ANKLE,
-        PoseLandmark.RIGHT_HIP to PoseLandmark.RIGHT_KNEE,
-        PoseLandmark.RIGHT_KNEE to PoseLandmark.RIGHT_ANKLE,
-    ).forEach { (a, b) ->
-        val pa = p(a) ?: return@forEach
-        val pb = p(b) ?: return@forEach
-        drawLine(color, pa, pb, strokeWidth = legW, cap = StrokeCap.Round)
-    }
-
-    // Hands & feet caps — small bumps so the limb endpoints look organic.
-    p(PoseLandmark.LEFT_WRIST)?.let { drawCircle(color, armW / 2f, it) }
-    p(PoseLandmark.RIGHT_WRIST)?.let { drawCircle(color, armW / 2f, it) }
-    p(PoseLandmark.LEFT_ANKLE)?.let { drawCircle(color, legW / 2f, it) }
-    p(PoseLandmark.RIGHT_ANKLE)?.let { drawCircle(color, legW / 2f, it) }
 }
 
 private fun DrawScope.drawLiveSkeleton(

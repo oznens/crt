@@ -34,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +80,17 @@ fun CameraScreen() {
     // When the lens flips, drop the EMA buffer so the skeleton doesn't snap
     // from one mirrored position to the other.
     LaunchedEffect(lensFront) { smoother.reset() }
+
+    // The front camera frames the user from the waist up; the full-body
+    // template would tower past the screen edges. Shrink + shift it up so
+    // it fits the selfie framing. Back camera uses the full-body template.
+    val displayedTemplate = remember(template, lensFront) {
+        if (lensFront) template.scaledAndShifted(scale = 0.60f, offsetY = -0.08f)
+        else template
+    }
+    // Captured by reference so the analyzer's long-lived closure always sees
+    // the latest template when the user taps a different pose.
+    val currentTemplate by rememberUpdatedState(displayedTemplate)
 
     // Re-apply RenderEffect whenever the filter changes (API 31+).
     LaunchedEffect(filter, previewViewRef) {
@@ -149,7 +161,7 @@ fun CameraScreen() {
                     }
                     val smoothed = smoother.update(raw)
                     detectedPoints = smoothed
-                    score = suggester.matchPoints(smoothed, template)?.score ?: 0
+                    score = suggester.matchPoints(smoothed, currentTemplate)?.score ?: 0
                 }
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -173,7 +185,7 @@ fun CameraScreen() {
 
         // 3) Pose template silhouette + faint live skeleton
         PoseOverlay(
-            template = template,
+            template = displayedTemplate,
             detected = detectedPoints,
             imageAspect = imageAspect,
             modifier = Modifier.fillMaxSize(),
